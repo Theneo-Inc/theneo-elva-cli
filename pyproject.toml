@@ -1,0 +1,106 @@
+[build-system]
+requires = ["hatchling>=1.24", "hatch-vcs>=0.4"]
+build-backend = "hatchling.build"
+
+[project]
+name = "elva-cli"
+dynamic = ["version"]
+description = "Elva - CLI for Theneo Elva"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [{ name = "Theneo", email = "support@theneo.io" }]
+keywords = ["openapi", "api", "documentation", "cli", "elva", "theneo"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Documentation",
+  "Typing :: Typed",
+]
+
+dependencies = [
+  "typer>=0.15,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff>=0.6",
+  "mypy>=1.11",
+  "pytest>=8.2",
+]
+
+[project.urls]
+Homepage = "https://getelva.ai"
+Source = "https://github.com/Theneo-Inc/theneo-elva-cli"
+Issues = "https://github.com/Theneo-Inc/theneo-elva-cli/issues"
+
+[project.scripts]
+elva = "elva_cli.main:main"
+elva-cli = "elva_cli.main:main"
+
+
+[tool.hatch.version]
+source = "vcs"
+raw-options = { version_scheme = "no-guess-dev" }
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/elva_cli/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/elva_cli"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "README.md", "CHANGELOG.md"]
+
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E", "F", "W",      # pycodestyle, pyflakes
+  "I",                # isort
+  "N",                # pep8-naming
+  "UP",               # pyupgrade
+  "B",                # bugbear
+  "A",                # builtin shadowing
+  "C4",               # comprehensions
+  "SIM",              # simplify
+  "PTH",              # use pathlib
+  "RET",              # return
+  "TC",               # move type-only imports into TYPE_CHECKING
+  "TID",              # tidy imports
+  "RUF",
+]
+ignore = [
+  "B008",  # typer relies on function calls in argument defaults
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["A002"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src"]
+warn_unreachable = true
+enable_error_code = ["ignore-without-code", "redundant-expr"]
+
+[[tool.mypy.overrides]]
+module = ["questionary.*", "trogon.*"]
+ignore_missing_imports = true
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers --strict-config"
+xfail_strict = true

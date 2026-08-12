@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Elva
+.venv/
+src/elva_cli/_version.py
+.ruff_cache/
