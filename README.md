@@ -1,17 +1,26 @@
 # Elva CLI
 
-CLI for Theneo Editor
+Manage your [Elva](https://getelva.ai) API projects from the terminal: import specs,
+inspect collections, and generate MCP servers without opening a browser.
+
+> **Early alpha.** The command surface is still taking shape. This release ships
+> `--version` and `--help` only; the first working commands land in `0.1.0`.
 
 ## Install
 
-Requires Python 3.11 or newer. Pick one:
+Requires Python 3.11 or newer.
 
 ```bash
-uv tool install elva-cli      # recommended
-pipx install elva-cli         # equivalent, if you already use pipx
+uv tool install elva-cli
 ```
 
-`elva` is then available from any directory, no virtualenv to activate:
+Or with [pipx](https://pipx.pypa.io/), if you already use it:
+
+```bash
+pipx install elva-cli
+```
+
+Either way, `elva` is then available from any directory:
 
 ```bash
 elva --version
@@ -24,14 +33,12 @@ To try it without installing anything:
 uvx --from elva-cli elva --version
 ```
 
-### Why not `pip install`?
+Don't have `uv`? It is a single command and no prerequisites:
 
-`pip install elva-cli` into a system Python is blocked on Ubuntu, Debian, Fedora and
-Homebrew macOS by [PEP 668](https://peps.python.org/pep-0668/), which reports
-`externally-managed-environment`. `uv tool` and `pipx` sidestep it by installing into
-an isolated environment for you and putting `elva` on your `PATH` -- which is what you
-want for a command-line tool anyway. Inside an already-activated virtualenv, plain
-`pip install elva-cli` works fine.
+```bash
+curl -fsSL https://astral.sh/uv/install.sh | sh          # macOS, Linux
+powershell -c "irm https://astral.sh/uv/install.ps1|iex" # Windows
+```
 
 ### Upgrade
 
@@ -39,68 +46,25 @@ want for a command-line tool anyway. Inside an already-activated virtualenv, pla
 uv tool upgrade elva-cli      # or: pipx upgrade elva-cli
 ```
 
+### Why not `pip install`?
 
-## Development
+On Ubuntu, Debian, Fedora and Homebrew macOS, `pip install elva-cli` fails with
+`externally-managed-environment`. Those systems reserve their Python for the OS package
+manager ([PEP 668](https://peps.python.org/pep-0668/)), and `--user` is blocked too.
 
-Requires Python 3.11 or newer.
+`uv tool` and `pipx` are the supported way to install a Python command-line application:
+they give it a private environment and put just the `elva` command on your `PATH`, so it
+can never conflict with your projects' dependencies.
 
-```bash
-git clone https://github.com/Theneo-Inc/theneo-elva-cli.git
-cd theneo-elva-cli
+Inside an already-activated virtualenv, `pip install elva-cli` works fine.
 
-python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
-```
+## Requirements
 
-`-e` installs in editable mode, so your source edits take effect immediately with
-no reinstall.
+- Python 3.11 or newer (bundled automatically if you install via `uv tool`)
+- An [Elva](https://getelva.ai) account
 
-Run it:
+## Links
 
-```bash
-elva --version
-elva --help
-```
-
-```
-$ elva --version
-elva 0.0.1 (python 3.12.3, linux-x86_64)
-```
-
-`python -m elva_cli --version` runs the same entry point, if you prefer that form.
-
-
-### With uv (faster)
-
-If you have [uv](https://docs.astral.sh/uv/), it replaces the venv and pip steps:
-
-```bash
-uv sync --extra dev
-uv run elva --version
-```
-
-#### Running `elva` from any directory (development)
-
-To activate everywhere locally:
-
-```bash
-uv tool install --editable ~/Desktop/theneo-elva-cli
-```
-
-### Checks
-
-```bash
-ruff check .        # lint
-ruff format .       # format
-mypy                # types, strict
-```
-
-### Version numbers
-
-The version comes from the git tag via `hatch-vcs` -- there is nothing to bump by hand.
-An untagged checkout reports something like `0.0.post1.dev2+gc657326`, which PyPI will
-not accept; a tagged one reports a clean `0.0.1`.
-
-To cut a release, see [RELEASING.md](RELEASING.md).
-
+- [Elva](https://getelva.ai)
+- [Issues](https://github.com/Theneo-Inc/theneo-elva-cli/issues)
+- [Contributing](CONTRIBUTING.md)
