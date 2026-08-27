@@ -1,0 +1,73 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v5
+
+      - run: uv build
+
+      - name: Reject unpublishable versions
+        run: |
+          version=$(ls dist/*.whl | head -1 | sed -E 's/.*elva_cli-(.+)-py3.*/\1/')
+          echo "built version: $version"
+          case "$version" in
+            *+*) echo "::error::'$version' has a PEP 440 local segment; PyPI will reject it. Build from an exact tag." ; exit 1 ;;
+            *dev*) echo "::error::'$version' is a dev version; the tag is missing or HEAD is past it." ; exit 1 ;;
+          esac
+
+      - run: uvx twine check dist/*
+
+      - name: Smoke test the wheel in a clean environment
+        run: |
+          python3 -m venv /tmp/smoke
+          /tmp/smoke/bin/pip install --quiet dist/*.whl
+          cd /tmp && /tmp/smoke/bin/elva --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  testpypi:
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write        # required for trusted publishing; no API token
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+
+  pypi:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
