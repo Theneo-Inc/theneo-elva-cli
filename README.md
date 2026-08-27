@@ -2,9 +2,45 @@
 
 CLI for Theneo Editor
 
-...i will update soon
+## Install
 
-## Quick start
+Requires Python 3.11 or newer. Pick one:
+
+```bash
+uv tool install elva-cli      # recommended
+pipx install elva-cli         # equivalent, if you already use pipx
+```
+
+`elva` is then available from any directory, no virtualenv to activate:
+
+```bash
+elva --version
+elva --help
+```
+
+To try it without installing anything:
+
+```bash
+uvx --from elva-cli elva --version
+```
+
+### Why not `pip install`?
+
+`pip install elva-cli` into a system Python is blocked on Ubuntu, Debian, Fedora and
+Homebrew macOS by [PEP 668](https://peps.python.org/pep-0668/), which reports
+`externally-managed-environment`. `uv tool` and `pipx` sidestep it by installing into
+an isolated environment for you and putting `elva` on your `PATH` -- which is what you
+want for a command-line tool anyway. Inside an already-activated virtualenv, plain
+`pip install elva-cli` works fine.
+
+### Upgrade
+
+```bash
+uv tool upgrade elva-cli      # or: pipx upgrade elva-cli
+```
+
+
+## Development
 
 Requires Python 3.11 or newer.
 
@@ -29,7 +65,7 @@ elva --help
 
 ```
 $ elva --version
-elva 0.1.0 (python 3.12.3, linux-x86_64)
+elva 0.0.1 (python 3.12.3, linux-x86_64)
 ```
 
 `python -m elva_cli --version` runs the same entry point, if you prefer that form.
@@ -62,10 +98,9 @@ mypy                # types, strict
 
 ### Version numbers
 
-The version comes from the git tag via `hatch-vcs` — there is nothing to bump by hand. An untagged checkout reports something like
-`0.0.post1.dev1+g5aaf07a.d20260812`; tag a release and it becomes clean:
+The version comes from the git tag via `hatch-vcs` -- there is nothing to bump by hand.
+An untagged checkout reports something like `0.0.post1.dev2+gc657326`, which PyPI will
+not accept; a tagged one reports a clean `0.0.1`.
 
-```bash
-git tag v0.1.0
-```
+To cut a release, see [RELEASING.md](RELEASING.md).
 
