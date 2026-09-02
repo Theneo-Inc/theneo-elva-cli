@@ -50,8 +50,8 @@ uv tool upgrade elva-cli      # or: pipx upgrade elva-cli
 
 Settings can come from several places. Highest priority wins:
 
-1. Command flags: `--workspace`, `--collection`, `--base-url`, `--profile`
-2. Environment: `ELVA_WORKSPACE`, `ELVA_COLLECTION`, `ELVA_BASE_URL`, `ELVA_PROFILE`, `ELVA_TIMEOUT`
+1. Command flags: `--workspace`, `--collection`, `--profile`
+2. Environment: `ELVA_WORKSPACE`, `ELVA_COLLECTION`, `ELVA_PROFILE`, `ELVA_TIMEOUT`
 3. `elva.json` in your project
 4. The selected profile in your user config
 5. Your user config
@@ -79,19 +79,24 @@ from any subfolder. Keep secrets out of it, it is meant to be committed.
 | macOS | `~/Library/Application Support/elva/config.json` |
 | Windows | `%LOCALAPPDATA%\elva\config.json` |
 
-Use profiles to switch between environments:
+A profile is a named set of defaults. Useful when you work across more than one
+workspace and do not want a project file for each:
 
 ```json
 {
   "profiles": {
-    "staging": { "base_url": "https://api-staging.getelva.ai" }
+    "work": { "workspace": "work-team", "collection": "work-api" },
+    "side": { "workspace": "side-team" }
   }
 }
 ```
 
 ```bash
-elva --profile staging config list
+elva --profile work collection list
 ```
+
+A project file beats a profile, so a repo with its own `elva.json` always wins over
+whichever profile you have selected.
 
 ### Seeing what was resolved
 
@@ -103,14 +108,13 @@ elva config list    # each value, and which layer set it
 ```
 
 ```
-$ elva --profile staging config list
-base_url      https://api-staging.getelva.ai  profile:staging
-collection    payments-api                    project
-profile       staging                         flag
+$ elva --profile work config list
+collection    work-api                        profile:work
+profile       work                            flag
 timeout       30.0                            default
-workspace     payments-team                   project
+workspace     work-team                       profile:work
 
-profiles      staging
+profiles      side, work
 ```
 
 ## Requirements

@@ -38,11 +38,11 @@ def _version_callback(value: bool) -> None:
 def root(
     click_ctx: typer.Context,
     profile: str | None = typer.Option(
-        None, "--profile", envvar="ELVA_PROFILE", help="Named profile from your user config."
+        None, "--profile", envvar="ELVA_PROFILE", help="Named set of defaults from your config."
     ),
-    base_url: str | None = typer.Option(
-        None, "--base-url", envvar="ELVA_BASE_URL", help="Override the Elva API base URL."
-    ),
+    # Internal escape hatch for Theneo development and CI against staging. Users
+    # only ever have prod, so it stays out of --help and out of the README.
+    base_url: str | None = typer.Option(None, "--base-url", envvar="ELVA_BASE_URL", hidden=True),
     workspace: str | None = typer.Option(
         None, "--workspace", "-w", envvar="ELVA_WORKSPACE", help="Workspace to act on."
     ),
