@@ -23,6 +23,7 @@ classifiers = [
 
 dependencies = [
   "typer>=0.15,<1.0",
+  "platformdirs>=4.2",
 ]
 
 [project.optional-dependencies]
@@ -91,7 +92,7 @@ ban-relative-imports = "all"
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = ["src"]
+files = ["src", "tests"]
 warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr"]
 

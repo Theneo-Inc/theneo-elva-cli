@@ -88,9 +88,9 @@ Four conventions that are cheap now and expensive later:
 - **Every prompt takes its flag value first** — return it if present, prompt if there is a
   TTY, otherwise exit `2`. A CLI that hangs waiting for input in CI is the worst failure
   mode there is.
-- **Exit codes are a public contract.** `0` ok, `1` unexpected, `2` usage, `3` auth,
-  `4` spec failed validation, `5` network/API, `130` interrupted. Never collapse `4` into
-  `1`; pipelines rely on the difference.
+- **Exit codes are a public contract.** See [docs/exit-codes.md](docs/exit-codes.md).
+  Never renumber a shipped code, and never collapse `4` into `1` -- pipelines rely on
+  the difference between a bad spec and a broken tool.
 - **Keep expensive imports out of module scope.** `httpx`, `pydantic` and Textual are
   imported inside the functions that use them so `elva --version` does not pay for them.
   Budget: under 200ms.
