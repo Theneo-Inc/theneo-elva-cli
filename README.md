@@ -109,13 +109,31 @@ elva config list    # each value, and which layer set it
 
 ```
 $ elva --profile work config list
-collection    work-api                        profile:work
-profile       work                            flag
-timeout       30.0                            default
-workspace     work-team                       profile:work
+collection  work-api    profile:work
+profile     work        flag
+timeout     30.0        default
+workspace   work-team   profile:work
 
-profiles      side, work
+profiles: side, work
 ```
+
+Every command also takes `--json` for scripting:
+
+```
+$ elva --profile work --json config list
+{
+  "profile": "work",
+  "settings": [
+    { "key": "collection", "value": "work-api", "origin": "profile:work" },
+    { "key": "workspace", "value": "work-team", "origin": "profile:work" }
+  ],
+  "profiles": ["side", "work"]
+}
+```
+
+Data goes to stdout and everything else to stderr, so `elva --json ... | jq` is always
+clean. `--quiet` drops hints and warnings but keeps data and errors. `--no-color` and
+`NO_COLOR` turn off styling.
 
 ## Requirements
 

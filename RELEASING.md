@@ -4,8 +4,8 @@ Releases are cut by pushing a git tag. Nothing else. There is no version to bump
 no file to edit, no credential to hold.
 
 ```bash
-git tag v0.0.2
-git push origin v0.0.2
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
 GitHub Actions builds, validates and publishes to PyPI. The rest of this document

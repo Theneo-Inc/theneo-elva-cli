@@ -40,7 +40,7 @@ is pointless. `1` may or may not be deterministic; treat it as a bug.
 
 ## Error output
 
-Every user-facing failure prints to **stderr** in one shape:
+Every user-facing failure prints to **stderr**, never stdout, in one shape:
 
 ```
 ELVA_AUTH: session expired

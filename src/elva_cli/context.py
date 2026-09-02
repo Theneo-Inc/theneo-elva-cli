@@ -20,9 +20,11 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     import typer
+    from rich.console import Console
 
     from elva_cli.settings.loader import Resolution
     from elva_cli.settings.models import Settings
+    from elva_cli.ui.output import Output
 
 
 @dataclass(frozen=True)
@@ -31,6 +33,9 @@ class GlobalOptions:
     base_url: str | None = None
     workspace: str | None = None
     collection: str | None = None
+    json_output: bool = False
+    quiet: bool = False
+    color: bool | None = None
 
 
 class Ctx:
@@ -38,6 +43,31 @@ class Ctx:
         self.options = options
         self.cwd = cwd
         self.env = env
+
+    @property
+    def color(self) -> bool | None:
+        """NO_COLOR wins over everything except an explicit --color."""
+        if self.options.color is None and self.env.get("NO_COLOR"):
+            return False
+        return self.options.color
+
+    @cached_property
+    def consoles(self) -> tuple[Console, Console]:
+        from elva_cli.ui.console import build_consoles
+
+        return build_consoles(color=self.color, quiet=self.options.quiet)
+
+    @cached_property
+    def out(self) -> Output:
+        from elva_cli.ui.output import Output
+
+        stdout, stderr = self.consoles
+        return Output(
+            stdout=stdout,
+            stderr=stderr,
+            json_mode=self.options.json_output,
+            quiet=self.options.quiet,
+        )
 
     @cached_property
     def resolution(self) -> Resolution:
