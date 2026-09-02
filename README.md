@@ -46,18 +46,6 @@ powershell -c "irm https://astral.sh/uv/install.ps1|iex" # Windows
 uv tool upgrade elva-cli      # or: pipx upgrade elva-cli
 ```
 
-### Why not `pip install`?
-
-On Ubuntu, Debian, Fedora and Homebrew macOS, `pip install elva-cli` fails with
-`externally-managed-environment`. Those systems reserve their Python for the OS package
-manager ([PEP 668](https://peps.python.org/pep-0668/)), and `--user` is blocked too.
-
-`uv tool` and `pipx` are the supported way to install a Python command-line application:
-they give it a private environment and put just the `elva` command on your `PATH`, so it
-can never conflict with your projects' dependencies.
-
-Inside an already-activated virtualenv, `pip install elva-cli` works fine.
-
 ## Requirements
 
 - Python 3.11 or newer (bundled automatically if you install via `uv tool`)
