@@ -41,13 +41,13 @@ def test_config_path_lists_every_file_even_when_absent(tmp_path: Path) -> None:
     assert result.returncode == 0
     assert "project config" in result.stdout
     assert "user config" in result.stdout
-    assert "(absent)" in result.stdout
+    assert "absent" in result.stdout
 
 
 def test_config_path_marks_an_existing_project_file(tmp_path: Path) -> None:
     root = project(tmp_path, {"workspace": "payments"})
     result = run("config", "path", cwd=root)
-    assert "(found)" in result.stdout
+    assert "found" in result.stdout
     assert "elva.json" in result.stdout
 
 

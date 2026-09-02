@@ -49,6 +49,15 @@ def root(
     collection: str | None = typer.Option(
         None, "--collection", "-c", envvar="ELVA_COLLECTION", help="Collection to act on."
     ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Emit machine readable JSON instead of formatted output."
+    ),
+    quiet: bool = typer.Option(
+        False, "--quiet", "-q", help="Suppress hints and warnings. Data and errors still print."
+    ),
+    color: bool | None = typer.Option(
+        None, "--color/--no-color", help="Force or disable colour. Honours NO_COLOR."
+    ),
     version: bool = typer.Option(
         False,
         "--version",
@@ -64,6 +73,9 @@ def root(
             base_url=base_url,
             workspace=workspace,
             collection=collection,
+            json_output=json_output,
+            quiet=quiet,
+            color=color,
         ),
         cwd=Path.cwd(),
         env=os.environ,
@@ -71,10 +83,14 @@ def root(
 
 
 def report(error: ElvaError) -> None:
-    """Render a user-facing error to stderr as code, message, then next action."""
-    typer.secho(f"{error.code}: {error.message}", err=True, fg=typer.colors.RED)
-    if error.hint:
-        typer.secho(f"  -> {error.hint}", err=True, dim=True)
+    """Render a user-facing error to stderr.
+
+    Goes through ui/ so errors look the same wherever they come from, but does not
+    need a Ctx: the boundary has to work when building the Ctx is what failed.
+    """
+    from elva_cli.ui.output import report_error
+
+    report_error(error, color=False if os.environ.get("NO_COLOR") else None)
 
 
 def write_crash(exc: BaseException) -> Path | None:
