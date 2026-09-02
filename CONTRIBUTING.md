@@ -46,6 +46,19 @@ ln -s "$PWD/.venv/bin/elva" ~/.local/bin/elva
 reporting your local dev version instead of what is on PyPI. If you already did, undo it
 with `uv tool uninstall elva-cli`.
 
+## Pointing at staging
+
+`--base-url` is hidden from `--help` and left out of the README: users only ever have
+prod, so it is not something to advertise. It still works, and so does the env var:
+
+```bash
+elva --base-url https://api-staging.getelva.ai config list
+ELVA_BASE_URL=https://api-staging.getelva.ai elva config list
+```
+
+`elva config list` shows the resolved `base_url` regardless, which is the quickest way
+to confirm which API a shell is talking to.
+
 ## Checks
 
 All three must pass before a PR merges.
