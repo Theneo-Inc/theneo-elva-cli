@@ -5,16 +5,17 @@ from __future__ import annotations
 import os
 import platform
 import sys
-from typing import TYPE_CHECKING, Protocol, TypeGuard
+from pathlib import Path
+from typing import Protocol, TypeGuard
 
 import typer
 
+from elva_cli.context import Ctx, GlobalOptions
 from elva_cli.errors import ElvaError, ExitCode
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from elva_cli.registry import LazyGroup
 
 app = typer.Typer(
+    cls=LazyGroup,
     name="elva",
     help="Elva - CLI for Theneo Elva.",
     no_args_is_help=True,
@@ -35,6 +36,19 @@ def _version_callback(value: bool) -> None:
 
 @app.callback()
 def root(
+    click_ctx: typer.Context,
+    profile: str | None = typer.Option(
+        None, "--profile", envvar="ELVA_PROFILE", help="Named profile from your user config."
+    ),
+    base_url: str | None = typer.Option(
+        None, "--base-url", envvar="ELVA_BASE_URL", help="Override the Elva API base URL."
+    ),
+    workspace: str | None = typer.Option(
+        None, "--workspace", "-w", envvar="ELVA_WORKSPACE", help="Workspace to act on."
+    ),
+    collection: str | None = typer.Option(
+        None, "--collection", "-c", envvar="ELVA_COLLECTION", help="Collection to act on."
+    ),
     version: bool = typer.Option(
         False,
         "--version",
@@ -44,7 +58,16 @@ def root(
         help="Show the current build version.",
     ),
 ) -> None:
-    pass
+    click_ctx.obj = Ctx(
+        GlobalOptions(
+            profile=profile,
+            base_url=base_url,
+            workspace=workspace,
+            collection=collection,
+        ),
+        cwd=Path.cwd(),
+        env=os.environ,
+    )
 
 
 def report(error: ElvaError) -> None:
