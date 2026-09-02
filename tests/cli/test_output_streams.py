@@ -8,10 +8,20 @@ import subprocess
 import sys
 from typing import TYPE_CHECKING
 
+import pytest
+
 if TYPE_CHECKING:
     from pathlib import Path
 
 ESC = b"\x1b"
+
+# Rich styles Windows output through the win32 console API rather than ANSI escapes,
+# and those calls do nothing when stdout is a pipe. So --color cannot put escape codes
+# in a piped stream there. The absence-of-colour tests below still hold everywhere.
+needs_ansi = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Windows renders colour via the console API, so a pipe never sees ANSI",
+)
 
 
 def run(
@@ -55,6 +65,7 @@ def test_json_stays_plain_even_when_colour_is_forced(tmp_path: Path) -> None:
     json.loads(result.stdout)
 
 
+@needs_ansi
 def test_forced_colour_styles_human_output(tmp_path: Path) -> None:
     result = run("--color", "config", "list", cwd=repo(tmp_path))
     assert ESC in result.stdout
@@ -70,6 +81,7 @@ def test_no_color_env_strips_styling(tmp_path: Path) -> None:
     assert ESC not in result.stdout
 
 
+@needs_ansi
 def test_explicit_color_flag_beats_no_color_env(tmp_path: Path) -> None:
     result = run("--color", "config", "list", cwd=repo(tmp_path), env={"NO_COLOR": "1"})
     assert ESC in result.stdout
