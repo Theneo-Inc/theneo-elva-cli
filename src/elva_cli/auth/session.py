@@ -20,6 +20,7 @@ import contextlib
 import json
 import logging
 import os
+import sys
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -148,6 +149,7 @@ def _refresh_lock() -> Iterator[None]:
         with contextlib.suppress(OSError):
             os.close(fd)
 
+# one refresh + one revoke, so the total stays within a single _HTTP_TIMEOUT.
 
 def _refresh(refresh_token: str, *, base_url: str, timeout: float = _HTTP_TIMEOUT) -> Credentials:
     import urllib.error
