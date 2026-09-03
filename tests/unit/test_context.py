@@ -55,3 +55,52 @@ def test_get_ctx_returns_what_the_callback_stored() -> None:
 def test_get_ctx_fails_loudly_when_the_callback_did_not_run() -> None:
     with pytest.raises(ElvaError, match="root callback"):
         get_ctx(_bare_context())
+
+
+@pytest.mark.parametrize("var", ["CI", "GITHUB_ACTIONS", "GITLAB_CI", "JENKINS_URL"])
+def test_is_ci_true_for_known_providers(var: str) -> None:
+    ctx = Ctx(GlobalOptions(), cwd=Path("/"), env={var: "true"})
+    assert ctx.is_ci is True
+
+
+def test_is_ci_false_when_set_to_a_falsey_value() -> None:
+    # A naive `env.get("CI")` truthy-check would get this wrong: the string
+    # "false" is truthy in Python even though it means "not CI".
+    ctx = Ctx(GlobalOptions(), cwd=Path("/"), env={"CI": "false"})
+    assert ctx.is_ci is False
+
+
+def test_is_ci_false_when_nothing_is_set() -> None:
+    ctx = Ctx(GlobalOptions(), cwd=Path("/"), env={})
+    assert ctx.is_ci is False
+
+
+def test_is_tty_uses_the_injected_override() -> None:
+    assert Ctx(GlobalOptions(), cwd=Path("/"), env={}, tty=True).is_tty is True
+    assert Ctx(GlobalOptions(), cwd=Path("/"), env={}, tty=False).is_tty is False
+
+
+def test_interactive_is_false_under_json_mode_even_with_a_tty() -> None:
+    ctx = Ctx(GlobalOptions(json_output=True), cwd=Path("/"), env={}, tty=True)
+    assert ctx.interactive is False
+
+
+def test_interactive_is_false_in_ci_even_with_a_tty() -> None:
+    ctx = Ctx(GlobalOptions(), cwd=Path("/"), env={"CI": "true"}, tty=True)
+    assert ctx.interactive is False
+
+
+def test_interactive_is_true_with_a_tty_and_no_ci() -> None:
+    ctx = Ctx(GlobalOptions(), cwd=Path("/"), env={}, tty=True)
+    assert ctx.interactive is True
+
+
+def test_interactive_is_false_without_a_tty() -> None:
+    ctx = Ctx(GlobalOptions(), cwd=Path("/"), env={}, tty=False)
+    assert ctx.interactive is False
+
+
+def test_quiet_alone_does_not_affect_interactive() -> None:
+    """--quiet lowers the noise floor; it doesn't mean nobody's there."""
+    ctx = Ctx(GlobalOptions(quiet=True), cwd=Path("/"), env={}, tty=True)
+    assert ctx.interactive is True
