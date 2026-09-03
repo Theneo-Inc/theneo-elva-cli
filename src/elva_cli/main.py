@@ -55,6 +55,9 @@ def root(
     quiet: bool = typer.Option(
         False, "--quiet", "-q", help="Suppress hints and warnings. Data and errors still print."
     ),
+    assume_yes: bool = typer.Option(
+        False, "--yes", "-y", help="Answer every confirmation with yes. Required in CI."
+    ),
     color: bool | None = typer.Option(
         None, "--color/--no-color", help="Force or disable colour. Honours NO_COLOR."
     ),
@@ -76,6 +79,7 @@ def root(
             json_output=json_output,
             quiet=quiet,
             color=color,
+            assume_yes=assume_yes,
         ),
         cwd=Path.cwd(),
         env=os.environ,
