@@ -9,6 +9,7 @@ must not pay for that.
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from functools import cached_property
 from typing import TYPE_CHECKING
@@ -36,13 +37,63 @@ class GlobalOptions:
     json_output: bool = False
     quiet: bool = False
     color: bool | None = None
+    assume_yes: bool = False
+
+
+CI_VARS = (
+    "CI",
+    "GITHUB_ACTIONS",
+    "GITLAB_CI",
+    "CIRCLECI",
+    "BUILDKITE",
+    "JENKINS_URL",
+    "TF_BUILD",
+    "TEAMCITY_VERSION",
+)
+
+_FALSEY = frozenset({"", "0", "false", "no", "off"})
 
 
 class Ctx:
-    def __init__(self, options: GlobalOptions, *, cwd: Path, env: Mapping[str, str]) -> None:
+    def __init__(
+        self,
+        options: GlobalOptions,
+        *,
+        cwd: Path,
+        env: Mapping[str, str],
+        tty: bool | None = None,
+    ) -> None:
         self.options = options
         self.cwd = cwd
         self.env = env
+        self._tty = tty
+
+    @property
+    def assume_yes(self) -> bool:
+        return self.options.assume_yes
+
+    @property
+    def is_ci(self) -> bool:
+        return any(self.env.get(var, "").strip().lower() not in _FALSEY for var in CI_VARS)
+
+    @property
+    def is_tty(self) -> bool:
+        """Both streams, because a prompt needs to read and to be seen."""
+        if self._tty is not None:
+            return self._tty
+        return sys.stdin.isatty() and sys.stdout.isatty()
+
+    @property
+    def interactive(self) -> bool:
+        """Whether it is safe to ask the user a question.
+
+        The single place this is decided. --json means a machine is reading, so a
+        prompt would corrupt the output as well as hang. --quiet is not included:
+        it lowers the noise floor, it does not say nobody is there.
+        """
+        if self.options.json_output or self.is_ci:
+            return False
+        return self.is_tty
 
     @property
     def color(self) -> bool | None:
