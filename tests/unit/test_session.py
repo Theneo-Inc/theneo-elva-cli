@@ -316,7 +316,7 @@ class TestConcurrentRefresh:
     def test_refresh_still_proceeds_when_the_filesystem_has_no_locks(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        import fcntl
+        fcntl = pytest.importorskip("fcntl")  # POSIX-only; Windows has no flock to break
 
         def no_locks(*_args: object) -> None:
             raise OSError("no locks available on this filesystem")
@@ -331,6 +331,13 @@ class TestConcurrentRefresh:
     def test_lock_is_released_so_a_second_acquisition_does_not_deadlock(
         self, config_dir: Path
     ) -> None:
+        # POSIX-only: _acquire_lock_fd() returns None without ever creating
+        # the lock file when fcntl isn't importable (Windows), so there is
+        # nothing for this file-lifecycle assertion to check there — the
+        # "no locking happens, the block still runs" half of that fallback
+        # is exercised on every platform via the other tests in this class.
+        pytest.importorskip("fcntl")
+
         with session._refresh_lock():
             pass
         with session._refresh_lock():
