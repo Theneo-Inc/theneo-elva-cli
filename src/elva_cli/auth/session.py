@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
-import sys
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -30,6 +30,8 @@ from elva_cli.settings import paths
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+_logger = logging.getLogger(__name__)
 
 _ENV_TOKEN = "ELVA_TOKEN"
 _SKEW = timedelta(seconds=60)
@@ -83,15 +85,17 @@ def _persist_refreshed(creds: Credentials) -> None:
     The refresh token that produced it is already spent server-side, so if
     this doesn't land the next run is a forced re-login. Go through
     _save_preferring_keyring so a single failing store falls back to the
-    other one, and if even that fails, say so instead of failing silently
-    (there's no logging setup in this module, hence the bare stderr write)."""
+    other one, and if even that fails, say so instead of failing silently.
+    This module sits below the ui/ boundary (see tests/unit/test_boundary.py)
+    and must not print — logging is the escape hatch for a below-boundary
+    module that still needs to surface something; elva_cli.logging is what
+    wires a handler up to it."""
     try:
         _save_preferring_keyring(creds)
     except (StoreUnavailableError, OSError):
-        print(
-            "warning: your session was refreshed but could not be saved; "
-            "you may need to run 'elva auth login' again.",
-            file=sys.stderr,
+        _logger.warning(
+            "your session was refreshed but could not be saved; "
+            "you may need to run 'elva auth login' again."
         )
 
 
@@ -144,7 +148,6 @@ def _refresh_lock() -> Iterator[None]:
         with contextlib.suppress(OSError):
             os.close(fd)
 
-# one refresh + one revoke, so the total stays within a single _HTTP_TIMEOUT.
 
 def _refresh(refresh_token: str, *, base_url: str, timeout: float = _HTTP_TIMEOUT) -> Credentials:
     import urllib.error

@@ -371,7 +371,7 @@ class TestRefreshPersistence:
         assert [c.access_token for c in file_saved] == ["access-2"]
 
     def test_warns_but_still_returns_the_token_when_no_store_can_save(
-        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
     ) -> None:
         self._stale_then_refresh(monkeypatch)
 
@@ -380,8 +380,10 @@ class TestRefreshPersistence:
 
         monkeypatch.setattr(session, "_save_preferring_keyring", boom)
 
-        assert session.get_access_token(base_url=BASE_URL) == "access-2"  # current call still works
-        assert "elva auth login" in capsys.readouterr().err
+        with caplog.at_level("WARNING", logger="elva_cli.auth.session"):
+            token = session.get_access_token(base_url=BASE_URL)
+        assert token == "access-2"  # the current call still works
+        assert "elva auth login" in caplog.text
 
 
 class TestSaveAndLogout:
