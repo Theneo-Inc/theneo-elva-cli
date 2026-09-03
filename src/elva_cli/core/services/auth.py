@@ -118,6 +118,8 @@ def _make_callback_handler(result: dict[str, str]) -> type[http.server.BaseHTTPR
     import urllib.parse
 
     class _Handler(http.server.BaseHTTPRequestHandler):
+        # A speculative browser connection that never sends a byte would
+        # otherwise block the read forever; time it out so the wait loop moves on.
         timeout = _STUCK_REQUEST_TIMEOUT_SECONDS
 
         def do_GET(self) -> None:
