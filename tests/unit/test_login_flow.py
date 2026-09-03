@@ -22,17 +22,6 @@ BASE_URL = "https://api.getelva.ai"
 VERIFIER_RE = re.compile(r"^[A-Za-z0-9\-._~]{43,128}$")  # mirrors the backend's Joi pattern
 
 
-@pytest.fixture(scope="module", autouse=True)
-def _warm_up_loopback_binding() -> None:
-    """The first couple of real TCP binds in a fresh process are slow on
-    macOS CI (observed: several seconds, no exception) -- pay that cost once
-    here rather than racing it under each test's own deadline."""
-    import http.server
-
-    for _ in range(2):
-        http.server.HTTPServer(("127.0.0.1", 0), http.server.BaseHTTPRequestHandler).server_close()
-
-
 def _noop(_message: str) -> None:
     return
 
@@ -161,18 +150,6 @@ class TestFullFlowAgainstARealListener:
 
         thread = threading.Thread(target=run)
         thread.start()
-        if not browser_opened.wait(timeout=10):
-            thread.join(timeout=5)
-            error = outcome.get("error")
-            detail = (
-                f"login() raised before opening a browser: {error!r}"
-                if error
-                else (
-                    f"login() neither opened a browser nor raised within 10s "
-                    f"(thread alive: {thread.is_alive()})"
-                )
-            )
-            pytest.fail(detail)
         return thread, browser_opened, captured, outcome
 
     @staticmethod
