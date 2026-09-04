@@ -64,8 +64,6 @@ def test_is_ci_true_for_known_providers(var: str) -> None:
 
 
 def test_is_ci_false_when_set_to_a_falsey_value() -> None:
-    # A naive `env.get("CI")` truthy-check would get this wrong: the string
-    # "false" is truthy in Python even though it means "not CI".
     ctx = Ctx(GlobalOptions(), cwd=Path("/"), env={"CI": "false"})
     assert ctx.is_ci is False
 

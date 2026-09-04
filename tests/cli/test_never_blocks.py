@@ -18,12 +18,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 TIMEOUT = 30
-# OK/USAGE cover every command that doesn't need to authenticate.
 NON_BLOCKING_EXIT_CODES = {ExitCode.OK, ExitCode.USAGE}
-# `elva auth login` deliberately refuses (exit AUTH) instead of hanging when
-# stdin is closed and there's no browser to drive -- that refusal *is* this
-# test's "did not hang" guarantee working, not a hole in it. Scoped to that one
-# command so the guarantee stays tight for everything else.
 NEEDS_AUTH: frozenset[tuple[str, ...]] = frozenset({("auth", "login")})
 
 

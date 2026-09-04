@@ -118,8 +118,6 @@ def _make_callback_handler(result: dict[str, str]) -> type[http.server.BaseHTTPR
     import urllib.parse
 
     class _Handler(http.server.BaseHTTPRequestHandler):
-        # A speculative browser connection that never sends a byte would
-        # otherwise block the read forever; time it out so the wait loop moves on.
         timeout = _STUCK_REQUEST_TIMEOUT_SECONDS
 
         def do_GET(self) -> None:
@@ -138,10 +136,7 @@ def _make_callback_handler(result: dict[str, str]) -> type[http.server.BaseHTTPR
 
 
 def _start_loopback_listener() -> tuple[http.server.HTTPServer, str, dict[str, str]]:
-    """A loopback HTTP server on an OS-assigned port. The backend's redirect_uri
-    allowlist is exactly {127.0.0.1, [::1]} with an explicit port and http://
-    only (see isValidLoopbackRedirectUri) — bind literally to 127.0.0.1 so the
-    redirect_uri we send matches it exactly."""
+    """A loopback HTTP server on an OS-assigned port."""
     import http.server
 
     result: dict[str, str] = {}
@@ -153,14 +148,7 @@ def _start_loopback_listener() -> tuple[http.server.HTTPServer, str, dict[str, s
 def _wait_for_callback(
     server: http.server.HTTPServer, result: dict[str, str], timeout_seconds: float
 ) -> dict[str, str]:
-    """Serve requests until the OAuth callback lands (it carries `code` or
-    `error`) or the deadline passes.
-
-    Not a single `handle_request()`: browsers routinely open speculative
-    connections to a loopback port and send nothing on them, and hit paths like
-    /favicon.ico. The handler carries a per-request socket timeout so a silent
-    connection can't wedge the read forever, and this loop steps past it (and
-    past stray hits) to the real callback."""
+    """Serve requests until the OAuth callback lands (it carries `code` or `error`) or the deadline passes."""
     deadline = time.monotonic() + timeout_seconds
     while not result.keys() & {"code", "error"}:
         remaining = deadline - time.monotonic()
