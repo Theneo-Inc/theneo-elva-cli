@@ -150,7 +150,18 @@ class TestFullFlowAgainstARealListener:
 
         thread = threading.Thread(target=run)
         thread.start()
-        assert browser_opened.wait(timeout=2), "webbrowser.open was never called"
+        if not browser_opened.wait(timeout=10):
+            thread.join(timeout=5)
+            error = outcome.get("error")
+            detail = (
+                f"login() raised before opening a browser: {error!r}"
+                if error
+                else (
+                    f"login() neither opened a browser nor raised within 10s "
+                    f"(thread alive: {thread.is_alive()})"
+                )
+            )
+            pytest.fail(detail)
         return thread, browser_opened, captured, outcome
 
     @staticmethod
