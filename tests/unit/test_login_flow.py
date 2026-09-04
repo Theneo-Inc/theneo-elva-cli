@@ -150,6 +150,7 @@ class TestFullFlowAgainstARealListener:
 
         thread = threading.Thread(target=run)
         thread.start()
+        assert browser_opened.wait(timeout=2), "webbrowser.open was never called"
         return thread, browser_opened, captured, outcome
 
     @staticmethod
@@ -227,6 +228,9 @@ class TestFullFlowAgainstARealListener:
     def test_a_stray_request_does_not_consume_the_callback(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # Browsers hit a loopback OAuth listener with things like /favicon.ico
+        # and speculative connections; the wait must step over those and still
+        # land the real callback rather than giving up after one request.
         monkeypatch.setattr(auth_service, "save_login", lambda _payload: None)
         body = {"user": {"email": "person@example.com"}, "tokens": {"access": {}, "refresh": {}}}
         monkeypatch.setattr(auth_service, "_exchange_token", lambda *_a: body)
@@ -245,6 +249,8 @@ class TestFullFlowAgainstARealListener:
     def test_malformed_exchange_payload_surfaces_as_apierror_not_a_crash(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # _exchange_token only guarantees top-level "tokens"/"user" keys exist;
+        # a structurally wrong body must not escape login() as a bare KeyError.
         monkeypatch.setattr(auth_service, "save_login", lambda _payload: None)
         monkeypatch.setattr(
             auth_service, "_exchange_token", lambda *_a: {"user": "nope", "tokens": {}}
@@ -264,6 +270,9 @@ class TestFullFlowAgainstARealListener:
     def test_unsavable_credentials_surface_as_autherror_not_a_crash(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        # Sign-in succeeded but the token store can't be written (read-only
+        # config dir, no keyring). That must be a clean AuthError, not a bare
+        # OSError escaping login().
         body = {"user": {"email": "person@example.com"}, "tokens": {"access": {}, "refresh": {}}}
         monkeypatch.setattr(auth_service, "_exchange_token", lambda *_a: body)
 
@@ -286,6 +295,9 @@ class TestFullFlowAgainstARealListener:
 
 class TestRenderImportBudget:
     def test_importing_renderables_does_not_pull_in_the_browser_flow(self) -> None:
+        # The LoginResult renderer is registered whenever output is rendered
+        # (`elva config ...` etc.). It must not drag http.server / urllib /
+        # webbrowser -- and so ssl -- into every rendered command.
         code = (
             "import sys, elva_cli.ui.renderables\n"
             "for m in ('webbrowser', 'http.server', 'urllib.request', 'ssl',\n"
