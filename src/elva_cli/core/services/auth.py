@@ -148,7 +148,8 @@ def _start_loopback_listener() -> tuple[http.server.HTTPServer, str, dict[str, s
 def _wait_for_callback(
     server: http.server.HTTPServer, result: dict[str, str], timeout_seconds: float
 ) -> dict[str, str]:
-    """Serve requests until the OAuth callback lands (it carries `code` or `error`) or the deadline passes."""
+    """Serve requests until the OAuth callback lands (it carries `code` or `error`)
+    or the deadline passes."""
     deadline = time.monotonic() + timeout_seconds
     while not result.keys() & {"code", "error"}:
         remaining = deadline - time.monotonic()
