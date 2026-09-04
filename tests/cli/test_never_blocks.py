@@ -12,10 +12,14 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from elva_cli.errors import ExitCode
+
 if TYPE_CHECKING:
     from pathlib import Path
 
 TIMEOUT = 30
+NON_BLOCKING_EXIT_CODES = {ExitCode.OK, ExitCode.USAGE}
+NEEDS_AUTH: frozenset[tuple[str, ...]] = frozenset({("auth", "login")})
 
 
 def command_paths() -> list[tuple[str, ...]]:
@@ -88,7 +92,8 @@ def test_command_terminates_with_stdin_closed(
         result = unattended(*flags, *path, cwd=workdir)
     except subprocess.TimeoutExpired:
         pytest.fail(f"'elva {' '.join((*flags, *path))}' blocked for {TIMEOUT}s with stdin closed")
-    assert result.returncode in {0, 2}, result.stderr.decode()
+    allowed = NON_BLOCKING_EXIT_CODES | ({ExitCode.AUTH} if path in NEEDS_AUTH else set())
+    assert result.returncode in allowed, result.stderr.decode()
 
 
 @pytest.mark.parametrize("path", PATHS, ids=lambda p: " ".join(p) or "root")
