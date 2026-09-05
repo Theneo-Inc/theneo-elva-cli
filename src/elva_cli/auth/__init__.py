@@ -17,9 +17,9 @@ from typing import TYPE_CHECKING
 from elva_cli.auth.models import Credentials
 
 if TYPE_CHECKING:
-    from elva_cli.auth.session import get_access_token, logout, save_login, save_pat
+    from elva_cli.auth.session import ENV_TOKEN, get_access_token, logout, save_login, save_pat
 
-__all__ = ["Credentials", "get_access_token", "logout", "save_login", "save_pat"]
+__all__ = ["ENV_TOKEN", "Credentials", "get_access_token", "logout", "save_login", "save_pat"]
 
 _LAZY = frozenset(__all__) - {"Credentials"}
 

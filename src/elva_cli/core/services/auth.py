@@ -1,9 +1,10 @@
-"""The browser + loopback PKCE sign-in flow (RFC 8252 + RFC 7636).
+"""The browser + loopback PKCE sign-in flow (RFC 8252 + RFC 7636), and logout.
 
-Talks to the backend's /api/auth/cli/{authorize,token} pair (the /complete
-step happens server-side, driven by the browser, not by us) and hands the
-result to elva_cli.auth.save_login — this module owns none of the credential
-storage itself, only getting a fresh session in the first place.
+login() talks to the backend's /api/auth/cli/{authorize,token} pair (the
+/complete step happens server-side, driven by the browser, not by us) and
+hands the result to elva_cli.auth.save_login. logout() is a thin wrapper
+around elva_cli.auth.logout, which already owns the actual sign-out logic.
+Neither function owns the credential storage itself.
 """
 
 from __future__ import annotations
@@ -16,9 +17,10 @@ import string
 import time
 from typing import TYPE_CHECKING, Any
 
+from elva_cli.auth import logout as logout_credentials
 from elva_cli.auth import save_login
 from elva_cli.auth.store import StoreUnavailableError
-from elva_cli.core.services.auth_result import LoginResult
+from elva_cli.core.services.auth_result import LoginResult, LogoutResult
 from elva_cli.errors import ApiError, AuthError
 
 if TYPE_CHECKING:
@@ -91,6 +93,10 @@ def login(
     return LoginResult(email=email)
 
 
+def logout(*, base_url: str) -> LogoutResult:
+    return logout_credentials(base_url=base_url)
+
+
 def _pkce_pair() -> tuple[str, str]:
     """RFC 7636 S256: a random verifier, and its base64url(sha256(...)) challenge."""
     verifier = "".join(secrets.choice(_VERIFIER_ALPHABET) for _ in range(64))
@@ -148,7 +154,7 @@ def _start_loopback_listener() -> tuple[http.server.HTTPServer, str, dict[str, s
 def _wait_for_callback(
     server: http.server.HTTPServer, result: dict[str, str], timeout_seconds: float
 ) -> dict[str, str]:
-    """Serve requests until the OAuth callback lands (it carries `code` or `error`) or the deadline passes."""
+    """Serve requests until the callback lands (`code` or `error`) or the deadline passes."""
     deadline = time.monotonic() + timeout_seconds
     while not result.keys() & {"code", "error"}:
         remaining = deadline - time.monotonic()

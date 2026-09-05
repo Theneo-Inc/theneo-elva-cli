@@ -66,6 +66,10 @@ def _patch_stores(monkeypatch: pytest.MonkeyPatch, stores: list[FakeStore]) -> N
     monkeypatch.setattr(session, "_stores", lambda: stores)
 
 
+def _logout(status: session.LogoutStatus) -> session.LogoutResult:
+    return session.LogoutResult(status=status)
+
+
 def _forbid_refresh(monkeypatch: pytest.MonkeyPatch) -> None:
     def fail(*_args: object, **_kwargs: object) -> Credentials:
         raise AssertionError("_refresh must not be called")
@@ -458,15 +462,37 @@ class TestSaveAndLogout:
         assert len(file_saved) == 1
         assert file_saved[0].access_token == "elva_pat_123"
 
-    def test_logout_clears_every_store(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_logout_with_nothing_stored_reports_not_signed_in(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         stores = [FakeStore(), FakeStore()]
         _patch_stores(monkeypatch, stores)
-        session.logout(base_url=BASE_URL)
+        outcome = session.logout(base_url=BASE_URL)
         assert all(s.cleared for s in stores)
+        assert outcome == _logout(session.LogoutStatus.NOT_SIGNED_IN)
 
-    def test_logout_revokes_session_server_side(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_logout_clears_a_stored_pat_without_touching_the_network(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        pat = Credentials.from_pat("elva_pat_123")
+        store = FakeStore(creds=pat)
+        _patch_stores(monkeypatch, [store])
+
+        def no_network(*_a: object, **_kw: object) -> None:
+            raise AssertionError("logout must not touch the network for a PAT")
+
+        monkeypatch.setattr("urllib.request.urlopen", no_network)
+        outcome = session.logout(base_url=BASE_URL)
+
+        assert store.cleared
+        assert outcome == _logout(session.LogoutStatus.SIGNED_OUT)
+
+    def test_logout_revokes_session_server_side_then_clears(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         creds = _session_creds(access_in=timedelta(hours=1), refresh_in=timedelta(days=7))
-        _patch_stores(monkeypatch, [FakeStore(creds=creds)])
+        store = FakeStore(creds=creds)
+        _patch_stores(monkeypatch, [store])
 
         revoked: dict[str, object] = {}
 
@@ -484,12 +510,14 @@ class TestSaveAndLogout:
             return _Resp()
 
         monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-        session.logout(base_url=BASE_URL)
+        outcome = session.logout(base_url=BASE_URL)
 
         assert revoked["url"] == f"{BASE_URL}/api/auth/logout"
         assert revoked["auth"] == f"Bearer {creds.access_token}"
+        assert store.cleared
+        assert outcome == _logout(session.LogoutStatus.SIGNED_OUT)
 
-    def test_logout_survives_server_revocation_failure(
+    def test_logout_keeps_credentials_when_the_revoke_post_fails(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         creds = _session_creds(access_in=timedelta(hours=1), refresh_in=timedelta(days=7))
@@ -500,10 +528,15 @@ class TestSaveAndLogout:
             raise urllib.error.URLError("offline")
 
         monkeypatch.setattr("urllib.request.urlopen", boom)
-        session.logout(base_url=BASE_URL)  # must not raise
-        assert store.cleared
+        outcome = session.logout(base_url=BASE_URL)  # must not raise
 
-    def test_logout_refreshes_a_stale_access_token_before_revoking(
+        # The POST never reached the server, so the session may still be live.
+        # The credentials have to survive so `elva auth logout` can be retried.
+        assert not store.cleared
+        assert store.load() == creds
+        assert outcome == _logout(session.LogoutStatus.REVOCATION_FAILED)
+
+    def test_logout_refreshes_a_stale_access_token_and_persists_the_new_pair(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         stale = _session_creds(access_in=timedelta(seconds=-30), refresh_in=timedelta(days=7))
@@ -513,6 +546,8 @@ class TestSaveAndLogout:
             access_in=timedelta(hours=1), refresh_in=timedelta(days=7), access_token="fresh-access"
         )
         monkeypatch.setattr(session, "_refresh", lambda *_a, **_kw: fresh)
+        persisted: list[Credentials] = []
+        monkeypatch.setattr(session, "_persist_refreshed", persisted.append)
 
         revoked: dict[str, object] = {}
 
@@ -529,9 +564,58 @@ class TestSaveAndLogout:
             return _Resp()
 
         monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-        session.logout(base_url=BASE_URL)
+        outcome = session.logout(base_url=BASE_URL)
 
         assert revoked["auth"] == "Bearer fresh-access"
+        assert persisted == [fresh]  # not thrown away, even though revoke succeeded
+        assert outcome == _logout(session.LogoutStatus.SIGNED_OUT)
+
+    def test_logout_persists_the_refreshed_pair_even_when_the_revoke_post_fails(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stale = _session_creds(access_in=timedelta(seconds=-30), refresh_in=timedelta(days=7))
+        store = FakeStore(creds=stale)
+        _patch_stores(monkeypatch, [store])
+
+        fresh = _session_creds(
+            access_in=timedelta(hours=1), refresh_in=timedelta(days=7), access_token="fresh-access"
+        )
+        monkeypatch.setattr(session, "_refresh", lambda *_a, **_kw: fresh)
+        persisted: list[Credentials] = []
+        monkeypatch.setattr(session, "_persist_refreshed", persisted.append)
+
+        def boom(*_a: object, **_kw: object) -> None:
+            raise urllib.error.URLError("offline")
+
+        monkeypatch.setattr("urllib.request.urlopen", boom)
+        outcome = session.logout(base_url=BASE_URL)  # must not raise
+
+        # The old refresh token is spent; the new pair is the only thing that
+        # can still end this session, so it must have been saved and kept.
+        assert persisted == [fresh]
+        assert not store.cleared
+        assert outcome == _logout(session.LogoutStatus.REVOCATION_FAILED)
+
+    def test_logout_keeps_credentials_when_it_cannot_reach_the_server_to_refresh(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stale = _session_creds(access_in=timedelta(seconds=-30), refresh_in=timedelta(days=7))
+        store = FakeStore(creds=stale)
+        _patch_stores(monkeypatch, [store])
+
+        def refresh_unreachable(*_a: object, **_kw: object) -> Credentials:
+            raise ApiError("Could not reach the server to refresh your session.")
+
+        monkeypatch.setattr(session, "_refresh", refresh_unreachable)
+
+        def no_revoke(*_a: object, **_kw: object) -> None:
+            raise AssertionError("logout must not POST with no token")
+
+        monkeypatch.setattr("urllib.request.urlopen", no_revoke)
+        outcome = session.logout(base_url=BASE_URL)  # must not raise
+
+        assert not store.cleared
+        assert outcome == _logout(session.LogoutStatus.REVOCATION_FAILED)
 
     def test_logout_uses_a_short_timeout_for_its_network_calls(
         self, monkeypatch: pytest.MonkeyPatch
@@ -549,6 +633,7 @@ class TestSaveAndLogout:
             return fresh
 
         monkeypatch.setattr(session, "_refresh", fake_refresh)
+        monkeypatch.setattr(session, "_persist_refreshed", lambda _creds: None)
 
         def fake_urlopen(request: object, timeout: float) -> object:
             timeouts.append(timeout)
@@ -568,7 +653,7 @@ class TestSaveAndLogout:
         assert timeouts == [session._LOGOUT_TIMEOUT, session._LOGOUT_TIMEOUT]
         assert session._LOGOUT_TIMEOUT < session._HTTP_TIMEOUT
 
-    def test_logout_skips_revocation_when_the_refresh_also_fails(
+    def test_logout_signs_out_cleanly_when_the_backend_rejects_the_refresh_token(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         stale = _session_creds(access_in=timedelta(seconds=-30), refresh_in=timedelta(days=7))
@@ -584,21 +669,29 @@ class TestSaveAndLogout:
             raise AssertionError("logout must not reach the network with no usable token")
 
         monkeypatch.setattr("urllib.request.urlopen", no_network)
-        session.logout(base_url=BASE_URL)  # must not raise
-        assert store.cleared
+        outcome = session.logout(base_url=BASE_URL)  # must not raise
 
-    def test_logout_does_not_spend_an_already_expired_refresh_token(
+        # A rejected refresh token means the session is already dead
+        # server-side -- nothing to revoke, so this is a clean sign-out.
+        assert store.cleared
+        assert outcome == _logout(session.LogoutStatus.SIGNED_OUT)
+
+    def test_logout_signs_out_cleanly_when_everything_has_already_expired(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         dead = _session_creds(access_in=timedelta(seconds=-30), refresh_in=timedelta(seconds=-1))
-        _patch_stores(monkeypatch, [FakeStore(creds=dead)])
-        _forbid_refresh(monkeypatch)  # _refresh must not be called
+        store = FakeStore(creds=dead)
+        _patch_stores(monkeypatch, [store])
+        _forbid_refresh(monkeypatch)  # nothing left to spend
 
         def no_network(*_a: object, **_kw: object) -> None:
             raise AssertionError("logout must not reach the network")
 
         monkeypatch.setattr("urllib.request.urlopen", no_network)
-        session.logout(base_url=BASE_URL)  # must not raise
+        outcome = session.logout(base_url=BASE_URL)  # must not raise
+
+        assert store.cleared
+        assert outcome == _logout(session.LogoutStatus.SIGNED_OUT)
 
 
 class TestRefreshHttpCall:

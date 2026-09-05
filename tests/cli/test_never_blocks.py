@@ -58,8 +58,14 @@ def unattended(
     """Run with stdin closed, so any prompt fails instead of waiting."""
     import os
 
-    full = {**os.environ, "XDG_CONFIG_HOME": str(cwd / "xdg")}
-    full.update(env or {})
+    full = {
+        **os.environ,
+        **(env or {}),
+        # Forced after `env` so a caller-supplied override can never disable
+        # these safety defaults by accident.
+        "XDG_CONFIG_HOME": str(cwd / "xdg"),
+        "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring",
+    }
     return subprocess.run(
         [sys.executable, "-m", "elva_cli", *args],
         stdin=subprocess.DEVNULL,
