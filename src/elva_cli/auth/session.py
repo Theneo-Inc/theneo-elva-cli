@@ -258,6 +258,21 @@ def _refresh_session(*, base_url: str) -> str:
         return refreshed.access_token
 
 
+def current_identity() -> str:
+    """Where get_access_token(base_url=...) would source its token right now:
+    'env' (ELVA_TOKEN), 'pat' (a stored personal access token), 'session' (a
+    stored browser session), or 'none'."""
+    if os.environ.get(ENV_TOKEN):
+        return "env"
+    creds, _ = _load_from_first_available_store()
+    return "none" if creds is None else creds.kind
+
+
+def forget_stored_credentials() -> None:
+    """Drop whatever the TokenStores hold."""
+    _clear_all_stores()
+
+
 def save_login(payload: dict[str, Any]) -> None:
     """Persist a fresh OAuth session from the CLI login exchange.
 

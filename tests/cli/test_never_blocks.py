@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 TIMEOUT = 30
 NON_BLOCKING_EXIT_CODES = {ExitCode.OK, ExitCode.USAGE}
-NEEDS_AUTH: frozenset[tuple[str, ...]] = frozenset({("auth", "login")})
+NEEDS_AUTH: frozenset[tuple[str, ...]] = frozenset({("auth", "login"), ("whoami",)})
 
 
 def command_paths() -> list[tuple[str, ...]]:
