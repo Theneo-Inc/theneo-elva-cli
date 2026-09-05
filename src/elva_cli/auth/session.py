@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 from elva_cli.auth.models import Credentials
 from elva_cli.auth.store import FileStore, KeyringStore, StoreUnavailableError, TokenStore
+from elva_cli.core.services.auth_result import LogoutResult, LogoutStatus
 from elva_cli.errors import ApiError, AuthError
 from elva_cli.settings import paths
 
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
 
 _logger = logging.getLogger(__name__)
 
-_ENV_TOKEN = "ELVA_TOKEN"
+ENV_TOKEN = "ELVA_TOKEN"
 _SKEW = timedelta(seconds=60)
 _LOCK_FILE = "refresh.lock"
 _HTTP_TIMEOUT = 10
@@ -185,7 +186,7 @@ def _refresh(refresh_token: str, *, base_url: str, timeout: float = _HTTP_TIMEOU
 def get_access_token(*, base_url: str) -> str:
     """The bearer token to send on this request. Refreshes a near-expiry
     session transparently; raises AuthError if there's nothing usable."""
-    env_token = os.environ.get(_ENV_TOKEN)
+    env_token = os.environ.get(ENV_TOKEN)
     if env_token:
         return env_token
 
@@ -274,7 +275,8 @@ def save_pat(token: str) -> None:
 
 def _revoke_server_side(
     access_token: str, *, base_url: str, timeout: float = _HTTP_TIMEOUT
-) -> None:
+) -> bool:
+    """POST /api/auth/logout."""
     import urllib.error
     import urllib.request
 
@@ -284,23 +286,19 @@ def _revoke_server_side(
         headers={"Authorization": f"Bearer {access_token}"},
         method="POST",
     )
-    with (
-        contextlib.suppress(urllib.error.URLError, TimeoutError),
-        urllib.request.urlopen(request, timeout=timeout),
-    ):
-        pass
+    try:
+        with urllib.request.urlopen(request, timeout=timeout):
+            pass
+    except (urllib.error.URLError, TimeoutError):
+        return False
+    return True
 
 
 def _revocation_token(
     creds: Credentials, *, base_url: str, timeout: float = _HTTP_TIMEOUT
 ) -> str | None:
-    """An access token that will still authenticate the logout call.
-
-    The stored one is used if it's still fresh; otherwise the refresh token
-    is spent for a new one, because a stale access token would just 401 and
-    leave the session alive server-side. Spending the refresh token is fine
-    here — the logout endpoint invalidates all of them anyway. Returns None
-    if nothing usable is left (offline, everything expired)."""
+    """An access token that will still authenticate the logout call, or None
+    if the session is already dead server-side and there's nothing to revoke."""
     now = datetime.now(UTC)
     if creds.access_expires_at is not None and creds.access_expires_at - now > _SKEW:
         return creds.access_token
@@ -311,29 +309,34 @@ def _revocation_token(
     ):
         return None
     try:
-        return _refresh(creds.refresh_token, base_url=base_url, timeout=timeout).access_token
-    except (RefreshFailedError, ApiError):
+        refreshed = _refresh(creds.refresh_token, base_url=base_url, timeout=timeout)
+    except RefreshFailedError:
         return None
+    _persist_refreshed(refreshed)
+    return refreshed.access_token
 
 
-def logout(*, base_url: str) -> None:
+def logout(*, base_url: str) -> LogoutResult:
     """Forget the stored credentials and, best-effort, revoke the session
-    server-side (POST /api/auth/logout).
-
-    The backend endpoint deletes *all* of the account's refresh tokens, so
-    this also ends any browser session for the same account. That is
-    deliberate — `elva auth logout` is meant to fully sign out, e.g. on a
-    shared machine. If the stored access token has expired, the refresh
-    token is spent to get one so the revocation still goes through;
-    revocation is skipped only when the network is down or nothing usable is
-    left. The local credentials are cleared either way, and the network calls
-    run on a short timeout (_LOGOUT_TIMEOUT) so this can't hang on a dead
-    connection.
-    """
-    creds, _ = _load_from_first_available_store()
-    _clear_all_stores()
-    if creds is None or creds.kind != "session":
-        return
-    token = _revocation_token(creds, base_url=base_url, timeout=_LOGOUT_TIMEOUT)
-    if token is not None:
-        _revoke_server_side(token, base_url=base_url, timeout=_LOGOUT_TIMEOUT)
+    server-side (POST /api/auth/logout)."""
+    with _refresh_lock():
+        creds, _ = _load_from_first_available_store()
+        if creds is None:
+            _clear_all_stores()
+            return LogoutResult(status=LogoutStatus.NOT_SIGNED_IN)
+        if creds.kind == "pat":
+            _clear_all_stores()
+            return LogoutResult(status=LogoutStatus.SIGNED_OUT)
+        try:
+            token = _revocation_token(creds, base_url=base_url, timeout=_LOGOUT_TIMEOUT)
+        except ApiError:
+            return LogoutResult(status=LogoutStatus.REVOCATION_FAILED)
+        if token is None:
+            # Refresh token expired or rejected — the session is already dead
+            _clear_all_stores()
+            return LogoutResult(status=LogoutStatus.SIGNED_OUT)
+        if _revoke_server_side(token, base_url=base_url, timeout=_LOGOUT_TIMEOUT):
+            _clear_all_stores()
+            return LogoutResult(status=LogoutStatus.SIGNED_OUT)
+        # The token was good but the POST didn't land
+        return LogoutResult(status=LogoutStatus.REVOCATION_FAILED)
