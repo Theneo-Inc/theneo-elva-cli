@@ -25,7 +25,8 @@ from typing import TYPE_CHECKING, Any
 
 from elva_cli.auth.models import Credentials
 from elva_cli.auth.store import FileStore, KeyringStore, StoreUnavailableError, TokenStore
-from elva_cli.core.services.auth_result import LogoutResult, LogoutStatus
+from elva_cli.core.services.auth_result import LogoutResult as LogoutResult
+from elva_cli.core.services.auth_result import LogoutStatus as LogoutStatus
 from elva_cli.errors import ApiError, AuthError
 from elva_cli.settings import paths
 
