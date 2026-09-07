@@ -3,6 +3,7 @@ from __future__ import annotations
 from urllib.error import HTTPError, URLError
 
 import pytest
+from rich.text import Text
 
 from elva_cli.core.services import whoami as whoami_service
 from elva_cli.core.services.whoami_result import WhoamiResult
@@ -127,12 +128,14 @@ class TestRendering:
         from elva_cli.ui.renderables import render
 
         text = render(WhoamiResult(email="a@b.com", company_name=None))
+        assert isinstance(text, Text)
         assert text.plain == "Signed in as a@b.com."
 
     def test_a_pat_renders_the_scoped_company(self) -> None:
         from elva_cli.ui.renderables import render
 
         text = render(WhoamiResult(email="a@b.com", company_name="Acme Inc"))
+        assert isinstance(text, Text)
         assert "a@b.com" in text.plain
         assert "personal access token scoped to Acme Inc" in text.plain
 

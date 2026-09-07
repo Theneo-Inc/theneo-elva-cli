@@ -10,8 +10,7 @@ from elva_cli.ui.renderables.base import render
 def _(result: WhoamiResult) -> Text:
     if result.company_name:
         return Text(
-            f"Signed in as {result.email} "
-            f"(personal access token scoped to {result.company_name}).",
+            f"Signed in as {result.email} (personal access token scoped to {result.company_name}).",
             style="elva.ok",
         )
     return Text(f"Signed in as {result.email}.", style="elva.ok")
