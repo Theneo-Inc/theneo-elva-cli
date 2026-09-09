@@ -28,6 +28,9 @@ class ImportSpecResult:
     spec_title: str | None
     spec_version: str | None
     url: str | None
+    metadata_confirmed: bool = True
+    """False when the server had not finished processing the spec in the time
+    the CLI waited, so the fields above may still describe the previous one."""
 
 
 @dataclass(frozen=True)

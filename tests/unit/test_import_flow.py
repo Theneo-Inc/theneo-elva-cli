@@ -49,7 +49,7 @@ def signed_in(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         service, "resolve_collection", lambda **_: Target(COLLECTION, "payments-api")
     )
-    monkeypatch.setattr(service, "_settled", lambda uploaded, **_: uploaded)
+    monkeypatch.setattr(service, "_settled", lambda uploaded, **_: (uploaded, True))
 
 
 def form(monkeypatch: pytest.MonkeyPatch, response: Any = CREATED) -> dict[str, Any]:
@@ -226,6 +226,21 @@ class TestUpdate:
         with pytest.raises(UsageError, match="which collection"):
             service.import_spec(base_url=BASE_URL, path=spec_file, update=True)
 
+    def test_name_with_update_is_refused_rather_than_ignored(
+        self, monkeypatch: pytest.MonkeyPatch, spec_file: Path, signed_in: None
+    ) -> None:
+        """--update replaces a spec and never renames, so accepting --name
+        here would report a success in which one flag did nothing."""
+        nothing_sent(monkeypatch)
+        with pytest.raises(UsageError, match="cannot be combined"):
+            service.import_spec(
+                base_url=BASE_URL,
+                path=spec_file,
+                collection="payments-api",
+                name="Renamed",
+                update=True,
+            )
+
     def test_creating_never_overwrites(
         self, monkeypatch: pytest.MonkeyPatch, spec_file: Path, signed_in: None
     ) -> None:
@@ -401,14 +416,48 @@ class TestPostmanIsRefused:
         with pytest.raises(UsageError, match="Postman collection"):
             service.import_spec(base_url=BASE_URL, path=spec_file, spec_format="postman")
 
-    def test_format_openapi_is_the_documented_escape_hatch(
+    def test_format_openapi_cannot_overrule_a_detected_collection(
         self, monkeypatch: pytest.MonkeyPatch, postman_file: Path, signed_in: None
     ) -> None:
+        """The refusal's own hint used to recommend this flag, which walked the
+        user straight back into the empty collection it exists to prevent."""
+        nothing_sent(monkeypatch)
+        with pytest.raises(UsageError, match="Postman collection"):
+            service.import_spec(
+                base_url=BASE_URL, path=postman_file, name="Forced", spec_format="openapi"
+            )
+
+    def test_the_hint_no_longer_recommends_the_flag(
+        self, monkeypatch: pytest.MonkeyPatch, postman_file: Path, signed_in: None
+    ) -> None:
+        nothing_sent(monkeypatch)
+        with pytest.raises(UsageError) as caught:
+            service.import_spec(base_url=BASE_URL, path=postman_file)
+        assert "--format openapi" not in (caught.value.hint or "")
+
+    def test_format_openapi_still_rescues_an_undetectable_document(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, signed_in: None
+    ) -> None:
+        """Detection has real gaps (a BOM, minified JSON), so the override has
+        to keep working where the document is merely ambiguous."""
+        path = tmp_path / "unmarked.json"
+        path.write_bytes(b'{"info": {"title": "Payments"}, "paths": {}}')
         seen = form(monkeypatch)
-        service.import_spec(
-            base_url=BASE_URL, path=postman_file, name="Forced", spec_format="openapi"
-        )
-        assert seen["data"] == POSTMAN
+        service.import_spec(base_url=BASE_URL, path=path, name="Forced", spec_format="openapi")
+        assert seen["method"] == "POST"
+
+    def test_format_postman_is_refused_on_a_url_too(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None
+    ) -> None:
+        """--url sends no bytes to sniff, so the declared format is all there is."""
+        nothing_sent(monkeypatch)
+        with pytest.raises(UsageError, match="Postman collection"):
+            service.import_spec(
+                base_url=BASE_URL,
+                spec_url="https://example.com/collection.json",
+                spec_format="postman",
+                name="X",
+            )
 
 
 class TestDryRun:
@@ -553,6 +602,19 @@ class TestCollectionLink:
     def test_an_unrecognised_host_gets_no_link_rather_than_a_wrong_one(self) -> None:
         assert service._collection_link("http://localhost:5001", "x") is None
 
+    @pytest.mark.parametrize(
+        "base",
+        [
+            pytest.param("https://api2.example.com", id="digit-suffix"),
+            pytest.param("https://apidocs.internal", id="word-suffix"),
+            pytest.param("https://apple.com", id="unrelated-word"),
+        ],
+    )
+    def test_a_host_that_merely_starts_with_api_gets_no_link(self, base: str) -> None:
+        """api2 would map to an app2 that does not exist, and a link to a host
+        that is not there is worse than no link at all."""
+        assert service._collection_link(base, "x") is None
+
 
 class TestSettlingOnUpdate:
     """PATCH answers before the server recomputes metadata; POST does not."""
@@ -568,12 +630,11 @@ class TestSettlingOnUpdate:
         stale = {"specTitle": "Old", "endpointCount": 3}
         fresh = {"specTitle": "New", "endpointCount": 1}
         monkeypatch.setattr(service, "get_json", lambda url, **_: {"collection": fresh})
-        assert (
-            service._settled(
-                stale, base_url=BASE_URL, token="t", company_id=COMPANY, collection_id=COLLECTION
-            )
-            is fresh
+        doc, confirmed = service._settled(
+            stale, base_url=BASE_URL, token="t", company_id=COMPANY, collection_id=COLLECTION
         )
+        assert doc is fresh
+        assert confirmed is True
 
     def test_values_that_never_move_are_returned_as_they_are(
         self, monkeypatch: pytest.MonkeyPatch
@@ -581,10 +642,11 @@ class TestSettlingOnUpdate:
         self._no_sleep(monkeypatch)
         same = {"specTitle": "Same", "endpointCount": 2}
         monkeypatch.setattr(service, "get_json", lambda url, **_: {"collection": dict(same)})
-        doc = service._settled(
+        doc, confirmed = service._settled(
             same, base_url=BASE_URL, token="t", company_id=COMPANY, collection_id=COLLECTION
         )
         assert service._metadata(doc) == service._metadata(same)
+        assert confirmed is False, "never seeing the value move is not confirmation"
 
     def test_a_failed_poll_never_fails_the_import(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._no_sleep(monkeypatch)
@@ -594,13 +656,12 @@ class TestSettlingOnUpdate:
             raise HttpError(500, None)
 
         monkeypatch.setattr(service, "get_json", boom)
-        assert (
-            service._settled(
-                uploaded,
-                base_url=BASE_URL,
-                token="t",
-                company_id=COMPANY,
-                collection_id=COLLECTION,
-            )
-            is uploaded
+        doc, confirmed = service._settled(
+            uploaded,
+            base_url=BASE_URL,
+            token="t",
+            company_id=COMPANY,
+            collection_id=COLLECTION,
         )
+        assert doc is uploaded
+        assert confirmed is False

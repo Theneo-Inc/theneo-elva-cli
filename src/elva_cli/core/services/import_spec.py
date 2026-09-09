@@ -19,16 +19,11 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
-# The server parses the whole spec before answering, so this is well over the
-# 10s the auth calls use.
 _HTTP_TIMEOUT = 120.0
 
-# Mirrors multer's limits in apps/backend/src/routes/collection.ts.
 MAX_BYTES = 10 * 1024 * 1024
 MAX_NAME = 100
 EXTENSIONS = (".json", ".yaml", ".yml")
-
-# The multipart field the route reads: upload.single('spec').
 _FIELD = "spec"
 
 _STDIN_SOURCE = "<stdin>"
@@ -75,7 +70,7 @@ def import_spec(
     space = resolve_workspace(base_url=base_url, token=token, workspace=workspace)
 
     if update:
-        collection_target, doc = _update(
+        collection_target, doc, confirmed = _update(
             base_url=base_url,
             token=token,
             company_id=space.id,
@@ -85,7 +80,7 @@ def import_spec(
             spec_url=spec_url,
         )
     else:
-        collection_target, doc = _create(
+        collection_target, doc, confirmed = _create(
             base_url=base_url,
             token=token,
             company_id=space.id,
@@ -106,6 +101,7 @@ def import_spec(
         spec_title=_text(doc.get("specTitle")),
         spec_version=_text(doc.get("specVersion")),
         url=_collection_link(base_url, collection_target.id),
+        metadata_confirmed=confirmed,
     )
 
 
@@ -167,26 +163,38 @@ def _checked(data: bytes, source: str) -> bytes:
 
 
 def _inspect(data: bytes | None, requested: str | None, source: str) -> tuple[SpecFormat, SpecMeta]:
-    """Format and whatever the document says about itself."""
-    if data is None:
-        return _declared(requested) or SpecFormat.OPENAPI, SpecMeta()
+    """Format and whatever the document says about itself.
 
+    Detection runs even when --format was given: the flag settles what an
+    ambiguous document is, but it cannot make a Postman collection into a spec
+    the backend can read.
+    """
     declared = _declared(requested)
-    detected = declared or detect_format(data)
-    if detected is None:
+    if declared is SpecFormat.POSTMAN:
+        raise _postman_error(source)
+    if data is None:
+        return declared or SpecFormat.OPENAPI, SpecMeta()
+
+    detected = detect_format(data)
+    if detected is SpecFormat.POSTMAN:
+        raise _postman_error(source)
+
+    resolved = declared or detected
+    if resolved is None:
         raise UsageError(
             f"could not tell whether {source} is an OpenAPI document or a Postman collection",
             hint=f"Pass --format with one of: {', '.join(FORMATS)}",
         )
-    if detected is SpecFormat.POSTMAN:
-        raise UsageError(
-            f"{source} is a Postman collection, and Elva cannot import one from a file",
-            hint=(
-                "Export it as OpenAPI first, or use the Postman integration in the web app. "
-                "Pass --format openapi to upload it as-is anyway."
-            ),
-        )
-    return detected, read_meta(data)
+    return resolved, read_meta(data)
+
+
+def _postman_error(source: str) -> UsageError:
+    """No --format override here: forcing openapi uploads the collection and
+    yields nothing, which is the outcome this refusal exists to prevent."""
+    return UsageError(
+        f"{source} is a Postman collection, and Elva cannot import one from a file",
+        hint="Export it as OpenAPI first, or use the Postman integration in the web app.",
+    )
 
 
 def _declared(requested: str | None) -> SpecFormat | None:
@@ -212,6 +220,11 @@ def _target_name(
     """Which collection this is about: --collection when updating, else --name,
     the spec's own title, or a prompt."""
     if update:
+        if name:
+            raise UsageError(
+                "--name cannot be combined with --update",
+                hint="--update replaces the spec of --collection; it never renames it.",
+            )
         if not collection:
             raise UsageError(
                 "--update needs to know which collection to update",
@@ -242,7 +255,7 @@ def _create(
     source: str,
     data: bytes | None,
     spec_url: str | None,
-) -> tuple[Target, dict[str, Any]]:
+) -> tuple[Target, dict[str, Any], bool]:
     """POST a new collection. The route awaits its metadata extraction and
     re-reads before answering, so this reply is already correct."""
     url = f"{base_url}/api/companies/{company_id}/collections"
@@ -272,7 +285,7 @@ def _create(
         raise _create_error(exc, name=name) from exc
 
     doc = _document(body)
-    return Target(id=_require_id(doc), name=_text(doc.get("name")) or name), doc
+    return Target(id=_require_id(doc), name=_text(doc.get("name")) or name), doc, True
 
 
 def _update(
@@ -284,7 +297,7 @@ def _update(
     source: str,
     data: bytes | None,
     spec_url: str | None,
-) -> tuple[Target, dict[str, Any]]:
+) -> tuple[Target, dict[str, Any], bool]:
     target = resolve_collection(
         base_url=base_url, token=token, company_id=company_id, collection=collection
     )
@@ -314,19 +327,24 @@ def _update(
     except HttpError as exc:
         raise _update_error(exc, collection=target.name) from exc
 
-    doc = _settled(
+    doc, confirmed = _settled(
         _document(body),
         base_url=base_url,
         token=token,
         company_id=company_id,
         collection_id=target.id,
     )
-    return target, doc
+    return target, doc, confirmed
 
 
 def _upload_name(source: str) -> str:
-    """multer checks the extension for a generic media type, so stdin needs a
-    filename that looks like what it is."""
+    """A filename for the multipart part.
+
+    The route's fileFilter accepts on media type and only falls back to the
+    extension when that type is generic (octet-stream, text/plain, empty).
+    _content_type always sends a specific one, so this name is never what
+    decides acceptance -- stdin just needs to send something.
+    """
     return "spec.json" if source == _STDIN_SOURCE else source
 
 
@@ -342,7 +360,7 @@ def _collection_link(base_url: str, collection_id: str) -> str | None:
     import urllib.parse
 
     parts = urllib.parse.urlsplit(base_url)
-    if not parts.netloc.startswith("api"):
+    if not parts.netloc.startswith(("api.", "api-")):
         return None
     host = "app" + parts.netloc[3:]
     return f"{parts.scheme}://{host}/collections?selected={collection_id}"
@@ -399,13 +417,16 @@ def _settled(
     token: str,
     company_id: str,
     collection_id: str,
-) -> dict[str, Any]:
-    """The collection once the server has caught up with the spec just sent.
+) -> tuple[dict[str, Any], bool]:
+    """The collection once the server has caught up with the spec just sent,
+    and whether it was actually observed to catch up.
 
     updateCollection fires extractAndUpdateSpecMetadata without awaiting, after
     it has already built the PATCH response, so that response still describes
     the previous spec. Best-effort: the upload already succeeded, so no failure
-    here is worth turning that into an error.
+    here is worth turning that into an error. But the document we settle for
+    may still be the previous spec's, and the caller has to say so rather than
+    report it as this import's result.
     """
     import time
 
@@ -418,11 +439,11 @@ def _settled(
         try:
             doc = _document(get_json(url, token=token))
         except (ApiError, HttpError):
-            return latest
+            return latest, False
         latest = doc
         if _metadata(doc) != before:
-            return doc
-    return latest
+            return doc, True
+    return latest, False
 
 
 def _endpoint_count(doc: dict[str, Any]) -> int | None:

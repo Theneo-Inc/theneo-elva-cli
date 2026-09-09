@@ -121,7 +121,7 @@ class TestImportSpecRendering:
     That is the one success the user has to be told about."""
 
     @staticmethod
-    def _result(endpoints: int | None) -> object:
+    def _result(endpoints: int | None, *, confirmed: bool = True) -> object:
         from elva_cli.core.services.import_result import ImportSpecResult
 
         return ImportSpecResult(
@@ -135,6 +135,7 @@ class TestImportSpecRendering:
             spec_title="Payments",
             spec_version="1.0",
             url="https://app.getelva.ai/collections?selected=0123456789abcdef01234567",
+            metadata_confirmed=confirmed,
         )
 
     @staticmethod
@@ -158,3 +159,14 @@ class TestImportSpecRendering:
 
     def test_an_absent_count_is_not_treated_as_zero(self) -> None:
         assert "No endpoints" not in self._text(self._result(None))
+
+    def test_unconfirmed_metadata_says_so(self) -> None:
+        out = self._text(self._result(24, confirmed=False))
+        assert "still describe the previous one" in out
+
+    def test_an_unconfirmed_zero_is_not_reported_as_finding_nothing(self) -> None:
+        """The count may be the previous spec's. Claiming this import found no
+        endpoints would send the user debugging an import that worked."""
+        out = self._text(self._result(0, confirmed=False))
+        assert "No endpoints were found" not in out
+        assert "still describe the previous one" in out

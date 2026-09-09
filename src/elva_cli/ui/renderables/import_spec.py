@@ -32,10 +32,16 @@ def _(result: ImportSpecResult) -> Group:
 
     body = [headline, Text(""), aligned_rows(rows)]
 
-    # A spec the backend cannot read lands as a successful import of nothing.
-    # Exit 0 is the server's answer and the CLI does not overrule it, but a
-    # silent zero is the one outcome a person needs told.
-    if result.endpoints == 0:
+    if not result.metadata_confirmed:
+        body += [
+            Text(""),
+            Text(
+                "The upload succeeded, but Elva had not finished reading the spec "
+                "in time — the details above may still describe the previous one.",
+                style="elva.warn",
+            ),
+        ]
+    elif result.endpoints == 0:
         body += [
             Text(""),
             Text(
