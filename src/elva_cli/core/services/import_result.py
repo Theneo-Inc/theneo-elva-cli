@@ -32,6 +32,15 @@ class ImportSpecResult:
     """False when the server had not finished processing the spec in the time
     the CLI waited, so the fields above may still describe the previous one."""
 
+    published_mcps: tuple[str, ...] = ()
+    """MCP servers published from this collection at the time of an update.
+
+    Their tools were generated from the spec they were published with and are
+    not regenerated here, so after --update they may be serving the previous
+    one. The list route does not return the deployment's spec hash, so this
+    cannot say which are actually stale -- only which exist.
+    """
+
 
 @dataclass(frozen=True)
 class DryRunResult:

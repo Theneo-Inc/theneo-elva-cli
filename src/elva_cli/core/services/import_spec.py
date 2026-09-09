@@ -6,7 +6,7 @@ Judging whether the spec is valid stays the server's job.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from elva_cli.auth import get_access_token
 from elva_cli.core.api.http import HttpError, default_error, get_json, send_form, send_json
@@ -30,6 +30,13 @@ _STDIN_SOURCE = "<stdin>"
 _UNEXPECTED_RESPONSE = "The server returned an unexpected response while importing your spec."
 
 _SETTLE_DELAYS = (0.3, 0.7, 1.5)
+
+
+class _Outcome(NamedTuple):
+    target: Target
+    doc: dict[str, Any]
+    metadata_confirmed: bool
+    published_mcps: tuple[str, ...] = ()
 
 
 def import_spec(
@@ -70,7 +77,7 @@ def import_spec(
     space = resolve_workspace(base_url=base_url, token=token, workspace=workspace)
 
     if update:
-        collection_target, doc, confirmed = _update(
+        outcome = _update(
             base_url=base_url,
             token=token,
             company_id=space.id,
@@ -80,7 +87,7 @@ def import_spec(
             spec_url=spec_url,
         )
     else:
-        collection_target, doc, confirmed = _create(
+        outcome = _create(
             base_url=base_url,
             token=token,
             company_id=space.id,
@@ -90,18 +97,20 @@ def import_spec(
             spec_url=spec_url,
         )
 
+    doc = outcome.doc
     return ImportSpecResult(
         action=str(action),
-        collection=_text(doc.get("name")) or collection_target.name,
-        collection_id=collection_target.id,
+        collection=_text(doc.get("name")) or outcome.target.name,
+        collection_id=outcome.target.id,
         workspace=space.name,
         source=source,
         spec_format=str(resolved),
         endpoints=_endpoint_count(doc),
         spec_title=_text(doc.get("specTitle")),
         spec_version=_text(doc.get("specVersion")),
-        url=_collection_link(base_url, collection_target.id),
-        metadata_confirmed=confirmed,
+        url=_collection_link(base_url, outcome.target.id),
+        metadata_confirmed=outcome.metadata_confirmed,
+        published_mcps=outcome.published_mcps,
     )
 
 
@@ -255,7 +264,7 @@ def _create(
     source: str,
     data: bytes | None,
     spec_url: str | None,
-) -> tuple[Target, dict[str, Any], bool]:
+) -> _Outcome:
     """POST a new collection. The route awaits its metadata extraction and
     re-reads before answering, so this reply is already correct."""
     url = f"{base_url}/api/companies/{company_id}/collections"
@@ -285,7 +294,7 @@ def _create(
         raise _create_error(exc, name=name) from exc
 
     doc = _document(body)
-    return Target(id=_require_id(doc), name=_text(doc.get("name")) or name), doc, True
+    return _Outcome(Target(id=_require_id(doc), name=_text(doc.get("name")) or name), doc, True)
 
 
 def _update(
@@ -297,7 +306,7 @@ def _update(
     source: str,
     data: bytes | None,
     spec_url: str | None,
-) -> tuple[Target, dict[str, Any], bool]:
+) -> _Outcome:
     target = resolve_collection(
         base_url=base_url, token=token, company_id=company_id, collection=collection
     )
@@ -327,14 +336,14 @@ def _update(
     except HttpError as exc:
         raise _update_error(exc, collection=target.name) from exc
 
-    doc, confirmed = _settled(
+    doc, confirmed, mcps = _settled(
         _document(body),
         base_url=base_url,
         token=token,
         company_id=company_id,
         collection_id=target.id,
     )
-    return target, doc, confirmed
+    return _Outcome(target, doc, confirmed, mcps)
 
 
 def _upload_name(source: str) -> str:
@@ -417,9 +426,10 @@ def _settled(
     token: str,
     company_id: str,
     collection_id: str,
-) -> tuple[dict[str, Any], bool]:
+) -> tuple[dict[str, Any], bool, tuple[str, ...]]:
     """The collection once the server has caught up with the spec just sent,
-    and whether it was actually observed to catch up.
+    whether it was actually observed to catch up, and the MCP servers
+    published from it.
 
     updateCollection fires extractAndUpdateSpecMetadata without awaiting, after
     it has already built the PATCH response, so that response still describes
@@ -433,17 +443,41 @@ def _settled(
     url = f"{base_url}/api/companies/{company_id}/collections/{collection_id}"
     before = _metadata(uploaded)
     latest = uploaded
+    mcps: tuple[str, ...] = ()
 
     for delay in _SETTLE_DELAYS:
         time.sleep(delay)
         try:
-            doc = _document(get_json(url, token=token))
+            body = get_json(url, token=token)
         except (ApiError, HttpError):
-            return latest, False
+            return latest, False, mcps
+        doc = _document(body)
+        mcps = _published_mcps(body)
         latest = doc
         if _metadata(doc) != before:
-            return doc, True
-    return latest, False
+            return doc, True, mcps
+    return latest, False, mcps
+
+
+def _published_mcps(body: Any) -> tuple[str, ...]:
+    """Names of the MCP servers this collection has published.
+
+    The collection route returns them alongside the document, so this costs no
+    extra call. It cannot say which are stale: the list selects deploymentId,
+    mcpName, status, toolCount and collectionId, and not the
+    collectionSpecHash that isOutdated compares against.
+    """
+    if not isinstance(body, dict):
+        return ()
+    rows = body.get("mcps")
+    if not isinstance(rows, list):
+        return ()
+    names = [
+        _text(row.get("mcpName")) or _text(row.get("mcpSlug")) or ""
+        for row in rows
+        if isinstance(row, dict) and row.get("status") == "published"
+    ]
+    return tuple(name for name in names if name)
 
 
 def _endpoint_count(doc: dict[str, Any]) -> int | None:

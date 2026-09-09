@@ -121,11 +121,17 @@ class TestImportSpecRendering:
     That is the one success the user has to be told about."""
 
     @staticmethod
-    def _result(endpoints: int | None, *, confirmed: bool = True) -> object:
+    def _result(
+        endpoints: int | None,
+        *,
+        confirmed: bool = True,
+        action: str = "created",
+        published_mcps: tuple[str, ...] = (),
+    ) -> object:
         from elva_cli.core.services.import_result import ImportSpecResult
 
         return ImportSpecResult(
-            action="created",
+            action=action,
             collection="payments-api",
             collection_id="0123456789abcdef01234567",
             workspace="Theneo",
@@ -136,6 +142,7 @@ class TestImportSpecRendering:
             spec_version="1.0",
             url="https://app.getelva.ai/collections?selected=0123456789abcdef01234567",
             metadata_confirmed=confirmed,
+            published_mcps=published_mcps,
         )
 
     @staticmethod
@@ -156,6 +163,16 @@ class TestImportSpecRendering:
         out = self._text(self._result(24))
         assert "No endpoints" not in out
         assert "24" in out
+
+    def test_a_published_mcp_is_called_out_on_an_update(self) -> None:
+        """Its tools were generated at publish time and this update does not
+        regenerate them, so it keeps serving the previous spec."""
+        out = self._text(self._result(24, action="updated", published_mcps=("payments-mcp",)))
+        assert "payments-mcp" in out
+        assert "republish it" in out
+
+    def test_nothing_is_said_when_there_are_no_published_mcps(self) -> None:
+        assert "MCP" not in self._text(self._result(24))
 
     def test_an_absent_count_is_not_treated_as_zero(self) -> None:
         assert "No endpoints" not in self._text(self._result(None))
