@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-# Not TYPE_CHECKING: Typer resolves this annotation at runtime.
 from pathlib import Path  # noqa: TC003
 
 import typer
