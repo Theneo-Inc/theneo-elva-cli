@@ -3,8 +3,7 @@
 Manage your [Elva](https://getelva.ai) API projects from the terminal: import specs,
 inspect collections, and generate MCP servers without opening a browser.
 
-> **Early alpha.** The command surface is still taking shape. This release ships
-> `--version` and `--help` only; the first working commands land in `0.1.0`.
+> **Early alpha.** The command surface is still taking shape.
 
 ## Install
 
@@ -45,6 +44,120 @@ powershell -c "irm https://astral.sh/uv/install.ps1|iex" # Windows
 ```bash
 uv tool upgrade elva-cli      # or: pipx upgrade elva-cli
 ```
+
+## Importing a spec
+
+Create a collection from an OpenAPI document:
+
+```bash
+elva import spec openapi.yaml
+```
+
+```
+Created Payments Platform API from openapi.yaml.
+
+workspace      Theneo
+format         openapi
+title          Payments Platform API
+version        2.4.1
+endpoints      17
+collection id  6aa1322d7ef06cc8f9017460
+url            https://app.getelva.ai/collections?selected=6aa1322d7ef06cc8f9017460
+```
+
+The collection is named after the spec's `info.title`. Override it with `--name`, which
+is also what you will be asked for if the spec has no title:
+
+```bash
+elva import spec openapi.yaml --name "Payments v2"
+```
+
+### Where the spec comes from
+
+A path, a URL Elva fetches itself, or stdin:
+
+```bash
+elva import spec openapi.yaml
+```
+
+```bash
+elva import spec --url https://example.com/openapi.yaml --name Payments
+```
+
+```bash
+curl -s https://example.com/openapi.yaml | elva import spec - --name Payments
+```
+
+A URL is fetched server-side, so nothing is read locally -- which is why `--name` cannot
+be defaulted from it. Files must be `.json`, `.yaml` or `.yml`, and 10 MB or smaller.
+
+### Updating an existing collection
+
+Importing never overwrites. Replacing the spec of a collection that already exists is a
+separate, explicit action:
+
+```bash
+elva -c payments-api import spec openapi.yaml --update
+```
+
+The previous spec is kept as a restorable version. `--collection` takes a name or an id,
+and `--workspace` picks which workspace to look that name up in; an account with a single
+workspace needs neither. Both are global flags, so they go before the subcommand, and both
+can live in `elva.json` instead.
+
+### Checking first
+
+`--dry-run` reports what would happen and sends nothing at all -- it works signed out:
+
+```bash
+elva import spec openapi.yaml --dry-run
+```
+
+```
+Would create Payments Platform API from openapi.yaml.
+
+format     openapi
+title      Payments Platform API
+version    2.4.1
+endpoints  17
+size       11.3 KB
+
+Nothing was sent. Drop --dry-run to do it.
+```
+
+### Postman
+
+Postman collections are not supported here. Elva reads operations out of an uploaded file
+as OpenAPI, so a Postman collection would import successfully and produce an empty
+collection -- `elva` refuses it rather than let that happen. Export to OpenAPI first, or
+use the Postman integration in the web app.
+
+### In CI
+
+The exit code is the whole interface:
+
+```bash
+elva import spec openapi.yaml
+case $? in
+  0) echo "imported" ;;
+  2) echo "bad invocation - wrong name, missing file, name already taken"; exit 1 ;;
+  3) echo "not signed in"; exit 1 ;;
+  4) echo "the spec was rejected"; exit 1 ;;
+  5) echo "Elva unreachable"; exit 0 ;;
+esac
+```
+
+Note what `0` does and does not mean. Elva stores the file and extracts what it can, so a
+spec it cannot parse imports *successfully* with no endpoints in it rather than failing.
+The CLI says so plainly in that case, but the exit code still comes from the server. A
+pipeline that cares should check the count:
+
+```bash
+count=$(elva --json import spec openapi.yaml | jq '.endpoints // 0')
+[ "$count" -gt 0 ] || { echo "spec produced no endpoints"; exit 1; }
+```
+
+See [exit codes](docs/exit-codes.md) for the full table.
 
 ## Configuration
 
