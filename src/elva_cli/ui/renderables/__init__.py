@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from elva_cli.ui.renderables import auth as _auth  # noqa: F401  registers renderers
 from elva_cli.ui.renderables import config as _config  # noqa: F401  registers renderers
+from elva_cli.ui.renderables import whoami as _whoami  # noqa: F401  registers renderers
 from elva_cli.ui.renderables.base import render
 
 __all__ = ["render"]

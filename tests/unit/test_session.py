@@ -694,6 +694,30 @@ class TestSaveAndLogout:
         assert outcome == _logout(session.LogoutStatus.SIGNED_OUT)
 
 
+class TestCurrentIdentity:
+    def test_reports_env_when_elva_token_is_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ELVA_TOKEN", "ci-token")
+        assert session.current_identity() == "env"
+
+    def test_reports_the_stored_credential_kind(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("ELVA_TOKEN", raising=False)
+        _patch_stores(monkeypatch, [FakeStore(creds=Credentials.from_pat("elva_pat_xyz"))])
+        assert session.current_identity() == "pat"
+
+    def test_reports_none_when_nothing_is_stored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("ELVA_TOKEN", raising=False)
+        _patch_stores(monkeypatch, [FakeStore(), FakeStore()])
+        assert session.current_identity() == "none"
+
+    def test_forget_stored_credentials_clears_every_store(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stores = [FakeStore(creds=Credentials.from_pat("x")), FakeStore()]
+        _patch_stores(monkeypatch, stores)
+        session.forget_stored_credentials()
+        assert all(s.cleared for s in stores)
+
+
 class TestRefreshHttpCall:
     def test_posts_refresh_token_to_the_expected_url(self, monkeypatch: pytest.MonkeyPatch) -> None:
         captured: dict[str, object] = {}
