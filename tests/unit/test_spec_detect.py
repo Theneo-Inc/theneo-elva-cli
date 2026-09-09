@@ -73,6 +73,23 @@ class TestDetectFormat:
     def test_leading_whitespace_and_braces_do_not_hide_the_marker(self) -> None:
         assert detect_format(b'\n\n  {\n  "openapi": "3.1.0"\n}') is SpecFormat.OPENAPI
 
+    def test_a_byte_order_mark_does_not_hide_the_marker(self) -> None:
+        """Swashbuckle and PowerShell redirection both emit a BOM, so a spec
+        carrying one is ordinary rather than exotic."""
+        assert detect_format(b'\xef\xbb\xbf{"openapi": "3.0.3"}') is SpecFormat.OPENAPI
+        assert detect_format(b"\xef\xbb\xbfopenapi: 3.0.3\n") is SpecFormat.OPENAPI
+
+    def test_the_marker_is_found_in_minified_json_whatever_its_position(self) -> None:
+        """Minified JSON is one line, so the marker is reachable only as a
+        member after a comma -- never at the start of a line of its own."""
+        assert detect_format(b'{"info":{"title":"X"},"openapi":"3.0.3"}') is SpecFormat.OPENAPI
+
+    def test_a_minified_postman_collection_is_still_postman(self) -> None:
+        """The looser OpenAPI marker must not start winning the race against
+        the Postman check, which runs first for exactly this reason."""
+        data = b'{"info":{"_postman_id":"abc","schema":"https://schema.getpostman.com/x"}}'
+        assert detect_format(data) is SpecFormat.POSTMAN
+
 
 def test_format_values_are_the_flag_values() -> None:
     """--format takes these strings, so they are a user-facing contract."""
@@ -133,3 +150,26 @@ paths:
     def test_a_missing_paths_block_leaves_the_count_unknown(self) -> None:
         """Unknown is not zero -- zero would trigger the empty-import warning."""
         assert read_meta(b"openapi: 3.0.3\ninfo:\n  title: T\n").endpoints is None
+
+    def test_tab_indented_json_is_read(self) -> None:
+        """PyYAML implements YAML 1.1, which forbids tabs in indentation where
+        JSON allows them. json.dumps(indent='\\t') emits exactly this, and
+        losing the title here would silently make --name mandatory."""
+        import json
+
+        data = json.dumps(
+            {
+                "openapi": "3.0.3",
+                "info": {"title": "Tabbed", "version": "1.0"},
+                "paths": {"/a": {"get": {}, "post": {}}},
+            },
+            indent="\t",
+        ).encode()
+        meta = read_meta(data)
+        assert meta.title == "Tabbed"
+        assert meta.version == "1.0"
+        assert meta.endpoints == 2
+
+    def test_a_byte_order_mark_does_not_hide_the_metadata(self) -> None:
+        data = b'\xef\xbb\xbf{"openapi":"3.0.3","info":{"title":"BOM","version":"2.0"}}'
+        assert read_meta(data).title == "BOM"
