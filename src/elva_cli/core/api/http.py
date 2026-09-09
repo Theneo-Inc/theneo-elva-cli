@@ -183,7 +183,11 @@ def _send(
         if exc.code in _REDIRECT_CODES:
             raise ApiError(REDIRECTED) from exc
         raise HttpError(exc.code, _detail(exc)) from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
+    except OSError as exc:
+        # URLError and TimeoutError are both OSError, but a connection reset
+        # part-way through reading the response is neither -- it arrives raw
+        # from the socket, and catching only those two lets it out as an
+        # unhandled traceback under exit 1 instead of a reachability failure.
         raise ApiError("Could not reach the server.") from exc
 
     if not raw:

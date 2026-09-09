@@ -87,6 +87,39 @@ class TestDefaultError:
         assert str(status) in str(error)
 
 
+class TestConnectionReset:
+    """A reset part-way through the response is a reachability failure, not a
+    crash: pipelines read the exit code to tell that from a bad spec."""
+
+    def test_a_reset_mid_response_is_reported_rather_than_raised_raw(self) -> None:
+        import socket
+        import struct
+
+        server = socket.socket()
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+
+        def serve() -> None:
+            conn, _ = server.accept()
+            conn.recv(65536)
+            conn.sendall(b"HTTP/1.0 200 OK\r\nContent-Length: 100\r\n\r\n")
+            # SO_LINGER with a zero timeout closes with an RST, so the client
+            # is reset while it waits for the body those headers promised.
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            conn.close()
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        try:
+            with pytest.raises(ApiError, match="reach"):
+                send_json(f"http://127.0.0.1:{port}/x", token="t", method="POST", payload={})
+        finally:
+            thread.join(timeout=5)
+            server.close()
+
+
 class TestRedirects:
     """A redirect is refused, never replayed with the bearer token attached."""
 
@@ -101,6 +134,16 @@ class TestRedirects:
                 pass
 
             def _route(self) -> None:
+                # Closing a socket with unread data in its receive queue sends
+                # an RST rather than a FIN, and the RST discards whatever the
+                # client had buffered -- so the response is lost and the client
+                # sees WinError 10053 instead. Draining is what a real server
+                # does; skipping it makes every one of these tests a race that
+                # Windows usually loses.
+                length = int(self.headers.get("Content-Length") or 0)
+                if length:
+                    self.rfile.read(length)
+
                 if self.path == "/start":
                     self.send_response(status)
                     self.send_header("Location", location)
