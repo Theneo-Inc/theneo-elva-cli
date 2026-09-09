@@ -26,6 +26,11 @@ dependencies = [
   "platformdirs>=4.2",
   "pydantic>=2.7",
   "keyring>=25",
+  # Reads info.title out of a spec so --name can default to it, and backs
+  # --dry-run's report. Parses JSON too, so one parser covers both formats.
+  "pyyaml>=6.0",
+  # ui/prompts.py has always imported this; it was simply never declared.
+  "questionary>=2.0",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +38,7 @@ dev = [
   "ruff>=0.6",
   "mypy>=1.11",
   "pytest>=8.2",
+  "types-PyYAML>=6.0",
 ]
 
 [project.urls]

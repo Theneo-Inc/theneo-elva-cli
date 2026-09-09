@@ -6,7 +6,8 @@ throwaway directory, so a subprocess test never reads or writes the OS
 keyring or the developer's real config -- see test_never_blocks.py's
 unattended() for the same reasoning. It also passes `timeout=` and closes
 stdin, so a regression that starts blocking fails the test fast instead of
-hanging CI.
+hanging CI. `stdin_text` opts into piping something in instead; subprocess
+refuses `stdin` and `input` together, hence the swap rather than both.
 """
 
 from __future__ import annotations
@@ -36,7 +37,10 @@ def workdir(tmp_path: Path) -> Path:
 @pytest.fixture
 def run(workdir: Path) -> Callable[..., subprocess.CompletedProcess[str]]:
     def _run(
-        *args: str, cwd: Path | None = None, env: dict[str, str] | None = None
+        *args: str,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        stdin_text: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         base = workdir if cwd is None else cwd
         full = {
@@ -47,15 +51,16 @@ def run(workdir: Path) -> Callable[..., subprocess.CompletedProcess[str]]:
             "XDG_CONFIG_HOME": str(base / "xdgconfig"),
             "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring",
         }
+        stream = {"stdin": subprocess.DEVNULL} if stdin_text is None else {"input": stdin_text}
         return subprocess.run(
             [sys.executable, "-m", "elva_cli", *args],
-            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             check=False,
             cwd=base,
             env=full,
             timeout=TIMEOUT,
+            **stream,
         )
 
     return _run
