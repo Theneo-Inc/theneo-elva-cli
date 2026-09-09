@@ -16,7 +16,7 @@ def responder(monkeypatch: pytest.MonkeyPatch, payload: Any) -> list[str]:
     """Replace the GET and record which URLs were asked for."""
     seen: list[str] = []
 
-    def fake_get(url: str, *, token: str, timeout: float = 30.0) -> Any:
+    def fake_get(url: str, *, token: str, timeout: float = 30.0, reauth: Any = None) -> Any:
         seen.append(url)
         if isinstance(payload, Exception):
             raise payload

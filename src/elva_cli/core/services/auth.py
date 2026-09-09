@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 from elva_cli.auth import logout as logout_credentials
 from elva_cli.auth import save_login
 from elva_cli.auth.store import StoreUnavailableError
+from elva_cli.core.api.identity import client_headers
 from elva_cli.core.services.auth_result import LoginResult, LogoutResult
 from elva_cli.errors import ApiError, AuthError
 
@@ -174,7 +175,7 @@ def _exchange_token(base_url: str, code: str, verifier: str) -> dict[str, Any]:
     request = urllib.request.Request(
         f"{base_url}/api/auth/cli/token",
         data=json.dumps({"code": code, "code_verifier": verifier}).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **client_headers()},
         method="POST",
     )
     try:

@@ -7,11 +7,11 @@ something to optimize away.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from elva_cli import auth
 from elva_cli.auth import get_access_token
+from elva_cli.core.api.http import HttpError, get_json
 from elva_cli.core.services.whoami_result import WhoamiResult
 from elva_cli.errors import ApiError, AuthError
 
@@ -53,28 +53,20 @@ def _rejected_token_error() -> AuthError:
 
 
 def _fetch_me(base_url: str, token: str) -> dict[str, Any]:
-    import urllib.error
-    import urllib.request
+    # GET is idempotent, so on a 401 the shared layer refreshes once and retries
+    # (and carries the X-Elva-Client marker). A refresh that itself fails raises
+    # AuthError/ApiError straight out, which whoami() handles.
+    def reauth(stale: str) -> str:
+        return auth.refresh_now(base_url=base_url, stale_access_token=stale)
 
-    request = urllib.request.Request(
-        f"{base_url}/api/auth/me",
-        headers={"Authorization": f"Bearer {token}"},
-        method="GET",
-    )
+    url = f"{base_url}/api/auth/me"
     try:
-        with urllib.request.urlopen(request, timeout=_HTTP_TIMEOUT) as response:
-            raw = response.read()
-    except urllib.error.HTTPError as exc:
-        if exc.code == 401:
+        body = get_json(url, token=token, timeout=_HTTP_TIMEOUT, reauth=reauth)
+    except HttpError as exc:
+        if exc.status == 401:
             raise AuthError("Your credentials are no longer valid.") from exc
-        raise ApiError(f"Could not verify who you are (HTTP {exc.code}).") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
-        raise ApiError("Could not reach the server.") from exc
+        raise ApiError(f"Could not verify who you are (HTTP {exc.status}).") from exc
 
-    try:
-        body = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise ApiError(_UNEXPECTED_RESPONSE) from exc
     if not isinstance(body, dict) or "user" not in body:
         raise ApiError(_UNEXPECTED_RESPONSE)
     return body
