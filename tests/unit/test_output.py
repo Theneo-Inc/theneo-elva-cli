@@ -114,3 +114,47 @@ def test_unregistered_renderer_fails_loudly_in_human_mode() -> None:
     output, _, _ = make_output()
     with pytest.raises(NotImplementedError, match="Unrendered"):
         output.result(Unrendered(1))
+
+
+class TestImportSpecRendering:
+    """A spec the backend cannot read imports successfully with nothing in it.
+    That is the one success the user has to be told about."""
+
+    @staticmethod
+    def _result(endpoints: int | None) -> object:
+        from elva_cli.core.services.import_result import ImportSpecResult
+
+        return ImportSpecResult(
+            action="created",
+            collection="payments-api",
+            collection_id="0123456789abcdef01234567",
+            workspace="Theneo",
+            source="openapi.yaml",
+            spec_format="openapi",
+            endpoints=endpoints,
+            spec_title="Payments",
+            spec_version="1.0",
+            url="https://app.getelva.ai/collections?selected=0123456789abcdef01234567",
+        )
+
+    @staticmethod
+    def _text(result: object) -> str:
+        from rich.console import Console
+
+        from elva_cli.ui.renderables import render
+
+        buffer = StringIO()
+        console = Console(file=buffer, width=100, no_color=True)
+        console.print(render(result))
+        return buffer.getvalue()
+
+    def test_zero_endpoints_is_called_out(self) -> None:
+        assert "No endpoints were found" in self._text(self._result(0))
+
+    def test_a_normal_import_says_nothing_extra(self) -> None:
+        out = self._text(self._result(24))
+        assert "No endpoints" not in out
+        assert "24" in out
+
+    def test_an_absent_count_is_not_treated_as_zero(self) -> None:
+        assert "No endpoints" not in self._text(self._result(None))

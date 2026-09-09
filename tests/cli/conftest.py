@@ -36,7 +36,10 @@ def workdir(tmp_path: Path) -> Path:
 @pytest.fixture
 def run(workdir: Path) -> Callable[..., subprocess.CompletedProcess[str]]:
     def _run(
-        *args: str, cwd: Path | None = None, env: dict[str, str] | None = None
+        *args: str,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+        stdin_text: str | None = None,
     ) -> subprocess.CompletedProcess[str]:
         base = workdir if cwd is None else cwd
         full = {
@@ -47,15 +50,20 @@ def run(workdir: Path) -> Callable[..., subprocess.CompletedProcess[str]]:
             "XDG_CONFIG_HOME": str(base / "xdgconfig"),
             "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring",
         }
+        # stdin is DEVNULL unless a test is deliberately piping something in,
+        # so a regression that starts blocking fails fast instead of hanging
+        # CI. subprocess refuses `stdin` and `input` together, hence the swap
+        # rather than passing both.
+        stream = {"stdin": subprocess.DEVNULL} if stdin_text is None else {"input": stdin_text}
         return subprocess.run(
             [sys.executable, "-m", "elva_cli", *args],
-            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             check=False,
             cwd=base,
             env=full,
             timeout=TIMEOUT,
+            **stream,
         )
 
     return _run
