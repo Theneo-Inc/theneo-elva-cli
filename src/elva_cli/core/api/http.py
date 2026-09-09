@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 
 DEFAULT_TIMEOUT = 30.0
 UNEXPECTED_RESPONSE = "The server returned an unexpected response."
+REDIRECTED = "The server redirected the request. Check the configured base URL."
+_REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
 
 
 class HttpError(Exception):
@@ -133,6 +135,30 @@ def _header_safe(value: str) -> str:
     return value.translate({ord(c): "_" for c in '"\\\r\n'})
 
 
+_OPENER: Any = None
+
+
+def _opener() -> Any:
+    """An opener that refuses redirects instead of following them.
+
+    urllib's default handler would replay the request at the new location with
+    our `Authorization: Bearer` still attached -- to another host, if that is
+    where it points -- and on 301/302/303 it rewrites POST/PATCH to GET, which
+    drops the upload body and surfaces only as an unexpected response. Neither
+    is ours to do on the caller's behalf, so a redirect becomes an error.
+    """
+    global _OPENER
+    if _OPENER is None:
+        import urllib.request
+
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+                return None
+
+        _OPENER = urllib.request.build_opener(_NoRedirect)
+    return _OPENER
+
+
 def _send(
     url: str,
     *,
@@ -151,9 +177,11 @@ def _send(
 
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with _opener().open(request, timeout=timeout) as response:
             raw = response.read()
     except urllib.error.HTTPError as exc:
+        if exc.code in _REDIRECT_CODES:
+            raise ApiError(REDIRECTED) from exc
         raise HttpError(exc.code, _detail(exc)) from exc
     except (urllib.error.URLError, TimeoutError) as exc:
         raise ApiError("Could not reach the server.") from exc

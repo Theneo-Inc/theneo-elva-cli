@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import http.server
+import threading
+
 import pytest
 
-from elva_cli.core.api.http import HttpError, _multipart, default_error
+from elva_cli.core.api.http import HttpError, _multipart, default_error, send_json
 from elva_cli.errors import ApiError, AuthError
 
 SPEC = b"openapi: 3.0.3\ninfo:\n  title: T\n"
@@ -82,3 +85,61 @@ class TestDefaultError:
         assert isinstance(error, ApiError)
         assert "Listing collections" in str(error)
         assert str(status) in str(error)
+
+
+class TestRedirects:
+    """A redirect is refused, never replayed with the bearer token attached."""
+
+    @staticmethod
+    def _serve(status: int, location: str) -> tuple[str, threading.Thread, list[str]]:
+        """A server whose first route redirects and whose second records the
+        Authorization header anything following the redirect would send."""
+        leaked: list[str] = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_: object) -> None:
+                pass
+
+            def _route(self) -> None:
+                if self.path == "/start":
+                    self.send_response(status)
+                    self.send_header("Location", location)
+                    self.end_headers()
+                    return
+                leaked.append(self.headers.get("Authorization", ""))
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"ok": true}')
+
+            def do_GET(self) -> None:
+                self._route()
+
+            def do_POST(self) -> None:
+                self._route()
+
+            def do_PATCH(self) -> None:
+                self._route()
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        return f"http://127.0.0.1:{server.server_port}", thread, leaked
+
+    @pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+    def test_a_redirect_is_an_error_and_the_token_never_follows(self, status: int) -> None:
+        base, _thread, leaked = self._serve(status, "/target")
+        with pytest.raises(ApiError, match="redirected"):
+            send_json(f"{base}/start", token="secret", method="PATCH", payload={"a": 1})
+        assert leaked == [], "the redirect target must never see the bearer token"
+
+    def test_an_off_host_redirect_is_refused_too(self) -> None:
+        sink, _sink_thread, leaked = self._serve(200, "/unused")
+        base, _thread, _ = self._serve(302, f"{sink}/target")
+        with pytest.raises(ApiError, match="redirected"):
+            send_json(f"{base}/start", token="secret", method="POST", payload={"a": 1})
+        assert leaked == [], "a cross-host redirect must not receive the token either"
+
+    def test_an_ordinary_response_still_works(self) -> None:
+        base, _thread, _ = self._serve(302, "/unused")
+        assert send_json(f"{base}/plain", token="t", method="POST", payload={}) == {"ok": True}
