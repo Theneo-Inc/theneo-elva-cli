@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 import subprocess
 import sys
@@ -65,7 +64,6 @@ def test_switch_rejects_object_id(tmp_path: Path) -> None:
 
 def test_switch_help_lists_global_flag(tmp_path: Path) -> None:
     root = _repo(tmp_path)
-    result = _run("workspace", "switch", "--help", cwd=root)
+    result = _run("workspace", "switch", "--help", cwd=root, env={"COLUMNS": "200"})
     assert result.returncode == 0
     assert "--global" in result.stdout
-    assert json.dumps  # sanity
