@@ -186,3 +186,57 @@ class TestRedirects:
     def test_an_ordinary_response_still_works(self) -> None:
         base, _thread, _ = self._serve(302, "/unused")
         assert send_json(f"{base}/plain", token="t", method="POST", payload={}) == {"ok": True}
+
+
+class TestErrorDetailShapes:
+    """A validation layer rarely answers with a flat string, and losing its
+    explanation leaves the CLI printing a generic refusal for a request the
+    server explained perfectly well."""
+
+    @staticmethod
+    def _detail_of(payload: object) -> str | None:
+        import json as _json
+
+        from elva_cli.core.api import http
+
+        class FakeError:
+            def read(self) -> bytes:
+                return _json.dumps(payload).encode()
+
+        return http._detail(FakeError())  # type: ignore[arg-type]
+
+    def test_a_flat_message_still_works(self) -> None:
+        assert self._detail_of({"message": '"collectionIds" is required'}) == (
+            '"collectionIds" is required'
+        )
+
+    def test_a_class_validator_array_is_joined(self) -> None:
+        """NestJS sends `message` as an array of every failing constraint."""
+        got = self._detail_of(
+            {"statusCode": 400, "message": ["collectionIds should not be empty"], "error": "Bad"}
+        )
+        assert got == "collectionIds should not be empty"
+
+    def test_several_failures_are_all_kept(self) -> None:
+        got = self._detail_of({"message": ["first is wrong", "second is wrong"]})
+        assert got == "first is wrong; second is wrong"
+
+    def test_a_nested_error_object_is_unwrapped(self) -> None:
+        assert self._detail_of({"error": {"message": "Postman said no"}}) == "Postman said no"
+
+    def test_an_errors_array_of_objects_is_read(self) -> None:
+        got = self._detail_of({"errors": [{"message": "bad id"}, {"message": "bad key"}]})
+        assert got == "bad id; bad key"
+
+    def test_a_body_with_nothing_sayable_is_still_none(self) -> None:
+        """Better a generic refusal than a guess at which field meant what."""
+        assert self._detail_of({"statusCode": 400, "success": False}) is None
+
+    def test_a_non_object_body_is_none(self) -> None:
+        assert self._detail_of([1, 2, 3]) is None
+
+    def test_deep_nesting_gives_up_rather_than_recursing_forever(self) -> None:
+        deep: object = {"message": "found me"}
+        for _ in range(6):
+            deep = {"error": deep}
+        assert self._detail_of(deep) is None

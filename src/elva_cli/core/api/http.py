@@ -239,16 +239,37 @@ def _attempt(
         raise ApiError(UNEXPECTED_RESPONSE) from exc
 
 
+_DETAIL_KEYS = ("message", "error", "detail", "errors", "results")
+
+
 def _detail(exc: urllib.error.HTTPError) -> str | None:
-    """The server's own explanation, when it sends one worth showing."""
+    """The server's own explanation, when it sends one worth showing.
+
+    Deliberately tolerant about shape. A validation layer rarely answers with a
+    flat string: class-validator sends `message` as an array, several
+    frameworks nest it under `error`, and losing all of that leaves the CLI
+    printing a generic refusal for a request the server explained perfectly
+    well. Anything that cannot be reduced to text is still dropped rather than
+    guessed at.
+    """
     try:
         payload = json.loads(exc.read())
     except (OSError, ValueError):
         return None
-    if not isinstance(payload, dict):
+    return _readable(payload)
+
+
+def _readable(payload: Any, depth: int = 0) -> str | None:
+    """Text out of whatever the error body turned out to be."""
+    if isinstance(payload, str):
+        return payload.strip() or None
+    if depth > 3:
         return None
-    for key in ("message", "error", "detail"):
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+    if isinstance(payload, list):
+        parts = [found for item in payload if (found := _readable(item, depth + 1))]
+        return "; ".join(parts) or None
+    if isinstance(payload, dict):
+        for key in _DETAIL_KEYS:
+            if key in payload and (found := _readable(payload[key], depth + 1)):
+                return found
     return None
