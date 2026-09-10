@@ -28,6 +28,7 @@ NEEDS_AUTH: frozenset[tuple[str, ...]] = frozenset(
         ("collection", "show"),
         ("whoami",),
         ("workspace", "list"),
+        ("mcp", "list"),
     }
 )
 
