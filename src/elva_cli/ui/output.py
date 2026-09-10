@@ -11,6 +11,7 @@ import dataclasses
 import json
 from typing import TYPE_CHECKING, Any
 
+from elva_cli.safe_text import printable
 from elva_cli.ui.renderables import render
 
 if TYPE_CHECKING:
@@ -52,9 +53,23 @@ class Output:
 
 
 def write_error(console: Console, error: ElvaError) -> None:
-    console.print(f"{error.code}: {error.message}", style="elva.error", soft_wrap=True)
+    """The one shape every failure is printed in.
+
+    markup=False is not decoration: an error message carries server text and
+    names the CLI did not choose, and Rich would otherwise read `[...]` in one
+    of them as a style tag -- raising MarkupError from inside the error
+    boundary, which turns a handled failure into an unhandled traceback.
+    """
+    console.print(
+        printable(f"{error.code}: {error.message}"),
+        style="elva.error",
+        soft_wrap=True,
+        markup=False,
+    )
     if error.hint:
-        console.print(f"  -> {error.hint}", style="elva.dim", soft_wrap=True)
+        console.print(
+            printable(f"  -> {error.hint}"), style="elva.dim", soft_wrap=True, markup=False
+        )
 
 
 def report_error(error: ElvaError, *, color: bool | None = None) -> None:
