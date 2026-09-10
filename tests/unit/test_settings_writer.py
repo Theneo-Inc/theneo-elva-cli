@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import sys
 from typing import TYPE_CHECKING
 
@@ -131,6 +132,34 @@ def test_atomic_write_restores_nothing_but_leaves_original_on_replace_failure(
     assert path.read_text() == original
     debris = [p.name for p in root.iterdir() if p.name.startswith(".elva.json")]
     assert debris == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes only")
+def test_project_write_does_not_chmod_repo_dir(tmp_path: Path) -> None:
+    root = make_repo(tmp_path)
+    root.chmod(0o700)
+    try:
+        writer.set_value(
+            key="workspace",
+            value="payments",
+            target=writer.WriteTarget("project", root / "elva.json"),
+        )
+        assert stat.S_IMODE(root.stat().st_mode) == 0o700
+    finally:
+        root.chmod(0o755)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes only")
+def test_user_write_preserves_existing_dir_mode(tmp_path: Path) -> None:
+    user_dir = tmp_path / "elva"
+    user_dir.mkdir()
+    user_dir.chmod(0o750)
+    writer.set_value(
+        key="workspace",
+        value="payments",
+        target=writer.WriteTarget("user", user_dir / "config.json"),
+    )
+    assert stat.S_IMODE(user_dir.stat().st_mode) == 0o750
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX symlinks only")
