@@ -18,7 +18,7 @@ from elva_cli.errors import ApiError, UsageError
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-_OBJECT_ID = re.compile(r"^[0-9a-fA-F]{24}$")
+_OBJECT_ID = re.compile(r"^[0-9a-f]{24}$")
 
 
 @dataclass(frozen=True)
@@ -40,8 +40,9 @@ def resolve_workspace(
     unambiguous case should not need a flag. More than one is a question the
     CLI cannot answer for the user, so it lists them and stops.
     """
-    if workspace and _OBJECT_ID.match(workspace):
-        return Target(id=workspace, name=workspace)
+    if workspace and _OBJECT_ID.match(workspace.lower()):
+        normalized = workspace.lower()
+        return Target(id=normalized, name=normalized)
 
     try:
         payload = get_json(f"{base_url}/api/companies/workspaces", token=token, reauth=reauth)
@@ -91,8 +92,9 @@ def resolve_collection(
     reauth: Callable[[str], str] | None = None,
 ) -> Target:
     """The collection to act on, by name or by id."""
-    if _OBJECT_ID.match(collection):
-        return Target(id=collection, name=collection)
+    if _OBJECT_ID.match(collection.lower()):
+        normalized = collection.lower()
+        return Target(id=normalized, name=normalized)
 
     try:
         payload = get_json(

@@ -20,8 +20,18 @@ def _display_origin(origin: str | None) -> str:
 
 @render.register
 def _(result: WorkspaceListResult) -> Group | Text:
+    warning: Text | None = None
+    if not result.configured_matched and result.configured_workspace:
+        origin = _display_origin(result.configured_origin)
+        suffix = f" (from {origin})" if origin else ""
+        warning = Text(
+            f"configured workspace {result.configured_workspace!r}{suffix} is not in this list",
+            style="elva.warn",
+        )
+
     if not result.workspaces:
-        return Text("You are not a member of any workspace.", style="elva.dim")
+        empty = Text("You are not a member of any workspace.", style="elva.dim")
+        return Group(warning, empty) if warning else empty
 
     entries: list[tuple[str, Text, Text]] = []
     for ws in result.workspaces:
@@ -36,4 +46,5 @@ def _(result: WorkspaceListResult) -> Group | Text:
             )
         entries.append((label, slug, note))
 
-    return Group(aligned_rows(entries))
+    table = aligned_rows(entries)
+    return Group(warning, table) if warning else Group(table)

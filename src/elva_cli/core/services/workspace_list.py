@@ -8,7 +8,7 @@ from elva_cli.core.api.http import HttpError, default_error, get_json
 from elva_cli.core.services.workspace_list_result import WorkspaceItem, WorkspaceListResult
 from elva_cli.errors import ApiError
 
-_OBJECT_ID = re.compile(r"^[0-9a-fA-F]{24}$")
+_OBJECT_ID = re.compile(r"^[0-9a-f]{24}$")
 _UNEXPECTED_RESPONSE = "The server returned an unexpected workspaces response."
 
 
@@ -25,11 +25,23 @@ def list_workspaces(
         raise default_error(exc, action="Listing workspaces") from exc
 
     rows = _rows(payload)
+    configured = active_workspace.strip() if active_workspace else None
     if not rows:
-        return WorkspaceListResult(workspaces=[])
+        return WorkspaceListResult(
+            workspaces=[],
+            configured_workspace=configured or None,
+            configured_origin=active_origin if configured else None,
+            configured_matched=configured is None,
+        )
 
-    items = _build_items(rows, active_workspace=active_workspace, active_origin=active_origin)
-    return WorkspaceListResult(workspaces=items)
+    items = _build_items(rows, active_workspace=configured, active_origin=active_origin)
+    matched = any(item.active for item in items) or configured is None
+    return WorkspaceListResult(
+        workspaces=items,
+        configured_workspace=configured if not matched else None,
+        configured_origin=active_origin if (configured and not matched) else None,
+        configured_matched=matched,
+    )
 
 
 def _rows(payload: Any) -> list[dict[str, Any]]:
@@ -48,8 +60,8 @@ def _build_items(
     active_origin: str,
 ) -> list[WorkspaceItem]:
     auto_select = active_workspace is None and len(rows) == 1
-    wanted = active_workspace.strip().lower() if active_workspace else None
-    match_by_id = active_workspace is not None and _OBJECT_ID.match(active_workspace) is not None
+    wanted = active_workspace.lower() if active_workspace else None
+    match_by_id = active_workspace is not None and _OBJECT_ID.match(wanted or "") is not None
 
     items: list[WorkspaceItem] = []
     for row in rows:
@@ -69,7 +81,7 @@ def _build_items(
             source = "auto"
         elif wanted is not None:
             if match_by_id:
-                is_active = str(row.get("id") or "") == active_workspace
+                is_active = str(row.get("id") or "").lower() == wanted
             else:
                 is_active = raw_name.lower() == wanted or raw_slug.lower() == wanted
             if is_active:

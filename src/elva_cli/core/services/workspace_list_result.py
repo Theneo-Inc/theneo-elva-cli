@@ -15,3 +15,6 @@ class WorkspaceItem:
 @dataclass(frozen=True)
 class WorkspaceListResult:
     workspaces: list[WorkspaceItem] = field(default_factory=list)
+    configured_workspace: str | None = None
+    configured_origin: str | None = None
+    configured_matched: bool = True
