@@ -30,6 +30,7 @@ class LazyGroup(TyperGroup):
         "config": Lazy("elva_cli.commands.config", "Inspect resolved configuration."),
         "import": Lazy("elva_cli.commands.import_", "Import an API spec into a collection."),
         "whoami": Lazy("elva_cli.commands.whoami", "Show who you're signed in as."),
+        "workspace": Lazy("elva_cli.commands.workspace", "Manage workspaces."),
     }
 
     def list_commands(self, ctx: Context) -> list[str]:
