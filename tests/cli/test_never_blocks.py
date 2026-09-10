@@ -59,7 +59,7 @@ def unattended(
     import os
 
     full = {
-        **os.environ,
+        **{k: v for k, v in os.environ.items() if not k.startswith("ELVA_")},
         **(env or {}),
         # Forced after `env` so a caller-supplied override can never disable
         # these safety defaults by accident.

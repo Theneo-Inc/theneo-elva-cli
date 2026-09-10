@@ -27,7 +27,8 @@ needs_ansi = pytest.mark.skipif(
 def run(
     *args: str, cwd: Path, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[bytes]:
-    full = {**os.environ, "XDG_CONFIG_HOME": str(cwd / "xdg")}
+    full = {k: v for k, v in os.environ.items() if not k.startswith("ELVA_")}
+    full["XDG_CONFIG_HOME"] = str(cwd / "xdg")
     full.pop("NO_COLOR", None)
     full.update(env or {})
     return subprocess.run(
