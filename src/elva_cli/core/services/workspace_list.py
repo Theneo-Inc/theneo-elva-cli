@@ -1,10 +1,3 @@
-"""List the workspaces the current bearer token can see.
-
-GET /api/companies/workspaces returns everything we need under auth(): id,
-name, companySlug, role, and friends. Mongo ids stay internal -- users see
-slugs and names.
-"""
-
 from __future__ import annotations
 
 import re
@@ -25,8 +18,6 @@ def list_workspaces(
     active_workspace: str | None,
     active_origin: str,
 ) -> WorkspaceListResult:
-    """Raises AuthError if not signed in; ApiError if the backend is
-    unreachable or its response doesn't match the contract."""
     token = get_access_token(base_url=base_url)
     try:
         payload = get_json(f"{base_url}/api/companies/workspaces", token=token)

@@ -1,7 +1,3 @@
-"""workspace list's result types, kept apart from the flow itself so importing
-them for rendering doesn't drag in urllib (see whoami_result.py for the same
-reasoning)."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
