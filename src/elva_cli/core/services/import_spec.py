@@ -9,6 +9,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from elva_cli.auth import get_access_token, refresh_now
+from elva_cli.core.api.collections import (
+    collection_link,
+    endpoint_count,
+    require_id,
+    text,
+)
 from elva_cli.core.api.http import HttpError, default_error, get_json, send_form, send_json
 from elva_cli.core.api.targets import Target, resolve_collection, resolve_workspace
 from elva_cli.core.services.import_result import Action, DryRunResult, ImportSpecResult
@@ -107,15 +113,15 @@ def import_spec(
     doc = outcome.doc
     return ImportSpecResult(
         action=str(action),
-        collection=_text(doc.get("name")) or outcome.target.name,
+        collection=text(doc.get("name")) or outcome.target.name,
         collection_id=outcome.target.id,
         workspace=space.name,
         source=source,
         spec_format=str(resolved),
-        endpoints=_endpoint_count(doc),
-        spec_title=_text(doc.get("specTitle")),
-        spec_version=_text(doc.get("specVersion")),
-        url=_collection_link(base_url, outcome.target.id),
+        endpoints=endpoint_count(doc),
+        spec_title=text(doc.get("specTitle")),
+        spec_version=text(doc.get("specVersion")),
+        url=collection_link(base_url, outcome.target.id),
         metadata_confirmed=outcome.metadata_confirmed,
         published_mcps=outcome.published_mcps,
     )
@@ -206,10 +212,13 @@ def _inspect(data: bytes | None, requested: str | None, source: str) -> tuple[Sp
 
 def _postman_error(source: str) -> UsageError:
     """No --format override here: forcing openapi uploads the collection and
-    yields nothing, which is the outcome this refusal exists to prevent."""
+    yields nothing, which is the outcome this refusal exists to prevent.
+
+    Elva does import Postman collections, just not out of a file: it pulls them
+    from Postman's own API, which is what `elva import postman` drives."""
     return UsageError(
         f"{source} is a Postman collection, and Elva cannot import one from a file",
-        hint="Export it as OpenAPI first, or use the Postman integration in the web app.",
+        hint="Run 'elva import postman' to pull it from Postman, or export it as OpenAPI first.",
     )
 
 
@@ -301,7 +310,13 @@ def _create(
         raise _create_error(exc, name=name) from exc
 
     doc = _document(body)
-    return _Outcome(Target(id=_require_id(doc), name=_text(doc.get("name")) or name), doc, True)
+    return _Outcome(
+        Target(
+            id=require_id(doc, message=_UNEXPECTED_RESPONSE), name=text(doc.get("name")) or name
+        ),
+        doc,
+        True,
+    )
 
 
 def _update(
@@ -376,18 +391,6 @@ def _content_type(data: bytes) -> str:
     return "application/json" if data.lstrip()[:1] in (b"{", b"[") else "application/yaml"
 
 
-def _collection_link(base_url: str, collection_id: str) -> str | None:
-    """The web app is the same host with `api` swapped for `app`. A base_url
-    that does not follow that shape gets no link rather than a wrong one."""
-    import urllib.parse
-
-    parts = urllib.parse.urlsplit(base_url)
-    if not parts.netloc.startswith(("api.", "api-")):
-        return None
-    host = "app" + parts.netloc[3:]
-    return f"{parts.scheme}://{host}/collections?selected={collection_id}"
-
-
 def _create_error(error: HttpError, *, name: str) -> ElvaError:
     if error.status == 409:
         return UsageError(
@@ -420,16 +423,8 @@ def _document(body: Any) -> dict[str, Any]:
     return doc
 
 
-def _require_id(doc: dict[str, Any]) -> str:
-    for key in ("id", "_id"):
-        value = doc.get(key)
-        if isinstance(value, str) and value:
-            return value
-    raise ApiError(_UNEXPECTED_RESPONSE)
-
-
 def _metadata(doc: dict[str, Any]) -> tuple[str | None, str | None, int | None]:
-    return _text(doc.get("specTitle")), _text(doc.get("specVersion")), _endpoint_count(doc)
+    return text(doc.get("specTitle")), text(doc.get("specVersion")), endpoint_count(doc)
 
 
 def _settled(
@@ -487,21 +482,8 @@ def _published_mcps(body: Any) -> tuple[str, ...]:
     if not isinstance(rows, list):
         return ()
     names = [
-        _text(row.get("mcpName")) or _text(row.get("mcpSlug")) or ""
+        text(row.get("mcpName")) or text(row.get("mcpSlug")) or ""
         for row in rows
         if isinstance(row, dict) and row.get("status") == "published"
     ]
     return tuple(name for name in names if name)
-
-
-def _endpoint_count(doc: dict[str, Any]) -> int | None:
-    """The list route sends a count; a single document sends the array."""
-    count = doc.get("endpointCount")
-    if isinstance(count, int):
-        return count
-    endpoints = doc.get("endpoints")
-    return len(endpoints) if isinstance(endpoints, list) else None
-
-
-def _text(value: Any) -> str | None:
-    return value.strip() if isinstance(value, str) and value.strip() else None

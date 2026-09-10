@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from elva_cli.core.api.collections import collection_link
 from elva_cli.core.api.http import HttpError
 from elva_cli.core.api.targets import Target
 from elva_cli.core.services import import_spec as service
@@ -597,10 +598,10 @@ class TestCollectionLink:
         ],
     )
     def test_the_web_app_host_is_derived(self, base: str, expected: str) -> None:
-        assert service._collection_link(base, "x") == expected
+        assert collection_link(base, "x") == expected
 
     def test_an_unrecognised_host_gets_no_link_rather_than_a_wrong_one(self) -> None:
-        assert service._collection_link("http://localhost:5001", "x") is None
+        assert collection_link("http://localhost:5001", "x") is None
 
     @pytest.mark.parametrize(
         "base",
@@ -613,7 +614,7 @@ class TestCollectionLink:
     def test_a_host_that_merely_starts_with_api_gets_no_link(self, base: str) -> None:
         """api2 would map to an app2 that does not exist, and a link to a host
         that is not there is worse than no link at all."""
-        assert service._collection_link(base, "x") is None
+        assert collection_link(base, "x") is None
 
 
 class TestPublishedMcps:
