@@ -91,9 +91,7 @@ def test_set_value_preserves_other_keys(tmp_path: Path) -> None:
     root = make_repo(tmp_path)
     path = root / "elva.json"
     path.write_text(json.dumps({"collection": "orders", "other": "keep"}), encoding="utf-8")
-    writer.set_value(
-        key="workspace", value="payments", target=writer.WriteTarget("project", path)
-    )
+    writer.set_value(key="workspace", value="payments", target=writer.WriteTarget("project", path))
     data = json.loads(path.read_text())
     assert data == {"collection": "orders", "other": "keep", "workspace": "payments"}
 
