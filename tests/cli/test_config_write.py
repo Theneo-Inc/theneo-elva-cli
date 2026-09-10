@@ -6,12 +6,8 @@ import stat
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
-
-if TYPE_CHECKING:
-    pass
 
 
 def run(
@@ -83,19 +79,21 @@ def test_set_creates_file_when_missing(tmp_path: Path) -> None:
 
 def test_set_preserves_unrelated_keys_and_profiles(tmp_path: Path) -> None:
     root = repo(tmp_path)
-    xdg = root / "xdgconfig" / "elva"
-    xdg.mkdir(parents=True)
-    original = {
-        "base_url": "https://old.example.com",
-        "profiles": {"prod": {"workspace": "billing"}},
-        "unknown_extra": "keep-me",
-    }
-    (xdg / "config.json").write_text(json.dumps(original), encoding="utf-8")
+    seed = run("config", "set", "--global", "base_url", "https://old.example.com", cwd=root)
+    assert seed.returncode == 0, seed.stderr
+
+    paths_payload = json.loads(run("--json", "config", "path", cwd=root).stdout)
+    user_file = Path(next(f["path"] for f in paths_payload["files"] if f["kind"] == "user"))
+
+    existing = json.loads(user_file.read_text())
+    existing["profiles"] = {"prod": {"workspace": "billing"}}
+    existing["unknown_extra"] = "keep-me"
+    user_file.write_text(json.dumps(existing), encoding="utf-8")
 
     result = run("config", "set", "--global", "workspace", "payments", cwd=root)
     assert result.returncode == 0, result.stderr
 
-    data = json.loads((xdg / "config.json").read_text())
+    data = json.loads(user_file.read_text())
     assert data["workspace"] == "payments"
     assert data["base_url"] == "https://old.example.com"
     assert data["profiles"] == {"prod": {"workspace": "billing"}}
