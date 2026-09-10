@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from urllib.error import HTTPError, URLError
-
 import pytest
 from rich.text import Text
 
+from elva_cli.core.api.http import HttpError
 from elva_cli.core.services import whoami as whoami_service
 from elva_cli.core.services.whoami_result import WhoamiResult
 from elva_cli.errors import ApiError, AuthError
@@ -142,25 +141,26 @@ class TestRendering:
 
 class TestFetchMe:
     def test_401_is_an_auth_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def fake_urlopen(*_args: object, **_kwargs: object) -> None:
-            raise HTTPError(BASE_URL, 401, "unauthorized", None, None)  # type: ignore[arg-type]
+        # A 401 that survives the shared layer's refresh-and-retry.
+        def fake_get(*_a: object, **_k: object) -> None:
+            raise HttpError(401, None)
 
-        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+        monkeypatch.setattr(whoami_service, "get_json", fake_get)
         with pytest.raises(AuthError):
             whoami_service._fetch_me(BASE_URL, "tok")
 
     def test_other_http_error_is_an_api_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def fake_urlopen(*_args: object, **_kwargs: object) -> None:
-            raise HTTPError(BASE_URL, 500, "boom", None, None)  # type: ignore[arg-type]
+        def fake_get(*_a: object, **_k: object) -> None:
+            raise HttpError(500, "boom")
 
-        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+        monkeypatch.setattr(whoami_service, "get_json", fake_get)
         with pytest.raises(ApiError):
             whoami_service._fetch_me(BASE_URL, "tok")
 
     def test_unreachable_server_is_an_api_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        def fake_urlopen(*_args: object, **_kwargs: object) -> None:
-            raise URLError("no route to host")
+        def fake_get(*_a: object, **_k: object) -> None:
+            raise ApiError("Could not reach the server.")
 
-        monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+        monkeypatch.setattr(whoami_service, "get_json", fake_get)
         with pytest.raises(ApiError):
             whoami_service._fetch_me(BASE_URL, "tok")

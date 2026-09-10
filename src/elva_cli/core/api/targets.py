@@ -10,10 +10,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from elva_cli.core.api.http import HttpError, default_error, get_json
 from elva_cli.errors import ApiError, UsageError
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _OBJECT_ID = re.compile(r"^[0-9a-fA-F]{24}$")
 
@@ -24,7 +27,13 @@ class Target:
     name: str
 
 
-def resolve_workspace(*, base_url: str, token: str, workspace: str | None) -> Target:
+def resolve_workspace(
+    *,
+    base_url: str,
+    token: str,
+    workspace: str | None,
+    reauth: Callable[[str], str] | None = None,
+) -> Target:
     """The workspace to act in.
 
     With nothing given, a single-workspace account resolves to that one -- the
@@ -35,7 +44,7 @@ def resolve_workspace(*, base_url: str, token: str, workspace: str | None) -> Ta
         return Target(id=workspace, name=workspace)
 
     try:
-        payload = get_json(f"{base_url}/api/companies/workspaces", token=token)
+        payload = get_json(f"{base_url}/api/companies/workspaces", token=token, reauth=reauth)
     except HttpError as exc:
         raise default_error(exc, action="Looking up your workspaces") from exc
 
@@ -73,13 +82,22 @@ def resolve_workspace(*, base_url: str, token: str, workspace: str | None) -> Ta
     return _exactly_one(matches, kind="workspace", wanted=workspace, available=found)
 
 
-def resolve_collection(*, base_url: str, token: str, company_id: str, collection: str) -> Target:
+def resolve_collection(
+    *,
+    base_url: str,
+    token: str,
+    company_id: str,
+    collection: str,
+    reauth: Callable[[str], str] | None = None,
+) -> Target:
     """The collection to act on, by name or by id."""
     if _OBJECT_ID.match(collection):
         return Target(id=collection, name=collection)
 
     try:
-        payload = get_json(f"{base_url}/api/companies/{company_id}/collections", token=token)
+        payload = get_json(
+            f"{base_url}/api/companies/{company_id}/collections", token=token, reauth=reauth
+        )
     except HttpError as exc:
         if exc.status == 404:
             raise UsageError(

@@ -20,18 +20,20 @@ import contextlib
 import json
 import logging
 import os
+import time
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from elva_cli.auth.models import Credentials
 from elva_cli.auth.store import FileStore, KeyringStore, StoreUnavailableError, TokenStore
+from elva_cli.core.api.identity import client_headers
 from elva_cli.core.services.auth_result import LogoutResult as LogoutResult
 from elva_cli.core.services.auth_result import LogoutStatus as LogoutStatus
 from elva_cli.errors import ApiError, AuthError
 from elva_cli.settings import paths
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Callable, Iterator
 
 _logger = logging.getLogger(__name__)
 
@@ -40,6 +42,16 @@ _SKEW = timedelta(seconds=60)
 _LOCK_FILE = "refresh.lock"
 _HTTP_TIMEOUT = 10
 _LOGOUT_TIMEOUT = 5
+
+# Backoff for a transiently-failing refresh (429 / 5xx / network): the initial
+# attempt plus retries sleeping these seconds between them, then give up with an
+# ApiError (transient, exit 5) - never a forced re-login.
+_REFRESH_BACKOFF_SECONDS = (1.0, 2.0, 4.0)
+
+# Distinct backend code (ELVA-200) meaning the refresh token predates the
+# current format and the user must sign in again - purely informational here,
+# since every 401/403 already routes to a re-login.
+_LEGACY_REFRESH_CODE = "REFRESH_TOKEN_LEGACY"
 
 
 class RefreshFailedError(Exception):
@@ -151,26 +163,70 @@ def _refresh_lock() -> Iterator[None]:
             os.close(fd)
 
 
-def _refresh(refresh_token: str, *, base_url: str, timeout: float = _HTTP_TIMEOUT) -> Credentials:
+def _refresh(
+    refresh_token: str,
+    *,
+    base_url: str,
+    timeout: float = _HTTP_TIMEOUT,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Credentials:
+    """Spend the refresh token for a fresh pair.
+
+    Sends X-Elva-Client: cli so the backend answers on the body path and, once
+    its compat flag is off, doesn't reject us as an unmarked client. A 401/403
+    is terminal (RefreshFailedError -> re-login); 429/5xx and network failures
+    are transient and retried with backoff before surfacing as ApiError."""
     import urllib.error
     import urllib.request
 
-    request = urllib.request.Request(
-        f"{base_url}/api/auth/refresh-tokens",
-        data=json.dumps({"refreshToken": refresh_token}).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            raw = response.read()
-    except urllib.error.HTTPError as exc:
-        if exc.code in (401, 403):
-            raise RefreshFailedError(f"backend rejected refresh token (HTTP {exc.code})") from exc
-        raise ApiError(f"Refreshing your session failed (HTTP {exc.code}).") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
-        raise ApiError("Could not reach the server to refresh your session.") from exc
+    last_transient: Exception | None = None
+    # Initial attempt (delay 0), then one retry per backoff delay.
+    for delay in (0.0, *_REFRESH_BACKOFF_SECONDS):
+        if delay:
+            sleep(delay)
+        request = urllib.request.Request(
+            f"{base_url}/api/auth/refresh-tokens",
+            data=json.dumps({"refreshToken": refresh_token}).encode("utf-8"),
+            headers={"Content-Type": "application/json", **client_headers()},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                raw = response.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403):
+                # Terminal: the token is dead (expired, rotated away, revoked,
+                # or legacy). Note the backend code when it says so, then
+                # re-login. Not retried.
+                code = _error_code(exc)
+                detail = " (legacy token)" if code == _LEGACY_REFRESH_CODE else ""
+                raise RefreshFailedError(
+                    f"backend rejected refresh token (HTTP {exc.code}){detail}"
+                ) from exc
+            if exc.code == 429 or exc.code >= 500:
+                last_transient = exc
+                continue  # transient - back off and retry
+            raise ApiError(f"Refreshing your session failed (HTTP {exc.code}).") from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            last_transient = exc
+            continue  # transient - back off and retry
+        else:
+            return _parse_refresh_body(raw)
 
+    raise ApiError("Could not reach the server to refresh your session.") from last_transient
+
+
+def _error_code(exc: Any) -> str | None:
+    """The backend's machine-readable error code (`data`), if it sent one."""
+    try:
+        payload = json.loads(exc.read())
+    except (OSError, ValueError):
+        return None
+    code = payload.get("data") if isinstance(payload, dict) else None
+    return code if isinstance(code, str) else None
+
+
+def _parse_refresh_body(raw: bytes) -> Credentials:
     unexpected = "The server returned an unexpected response while refreshing your session."
     try:
         body = json.loads(raw)
@@ -259,6 +315,43 @@ def _refresh_session(*, base_url: str) -> str:
         return refreshed.access_token
 
 
+def refresh_now(*, base_url: str, stale_access_token: str) -> str:
+    """Force a refresh after a request 401'd on a token that looked valid by
+    expiry (the server rejected it early - password change, inactivity, etc.).
+
+    Bounded to sessions. Under the cross-process lock we re-read the store: if
+    another process already rotated (the stored access token differs from the
+    one that 401'd), return that instead of spending a second refresh - the
+    double-spend is exactly what would trip the backend's reuse detection.
+    Raises AuthError if there's no usable session to refresh."""
+    with _refresh_lock():
+        creds, _ = _load_from_first_available_store()
+        if (
+            creds is None
+            or creds.kind != "session"
+            or creds.refresh_token is None
+            or creds.refresh_expires_at is None
+        ):
+            raise AuthError("Your session has expired.")
+
+        if creds.access_token != stale_access_token:
+            # A sibling process refreshed while we held the stale token.
+            return creds.access_token
+
+        if creds.refresh_expires_at <= datetime.now(UTC):
+            _clear_all_stores()
+            raise AuthError("Your session has expired.")
+
+        try:
+            refreshed = _refresh(creds.refresh_token, base_url=base_url)
+        except RefreshFailedError as exc:
+            _clear_all_stores()
+            raise AuthError("Your session has expired.") from exc
+
+        _persist_refreshed(refreshed)
+        return refreshed.access_token
+
+
 def current_identity() -> str:
     """Where get_access_token(base_url=...) would source its token right now:
     'env' (ELVA_TOKEN), 'pat' (a stored personal access token), 'session' (a
@@ -299,7 +392,7 @@ def _revoke_server_side(
     request = urllib.request.Request(
         f"{base_url}/api/auth/logout",
         data=b"",
-        headers={"Authorization": f"Bearer {access_token}"},
+        headers={"Authorization": f"Bearer {access_token}", **client_headers()},
         method="POST",
     )
     try:

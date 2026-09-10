@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from elva_cli.auth import get_access_token
+from elva_cli.auth import get_access_token, refresh_now
 from elva_cli.core.api.http import HttpError, default_error, get_json, send_form, send_json
 from elva_cli.core.api.targets import Target, resolve_collection, resolve_workspace
 from elva_cli.core.services.import_result import Action, DryRunResult, ImportSpecResult
@@ -74,7 +74,13 @@ def import_spec(
         )
 
     token = get_access_token(base_url=base_url)
-    space = resolve_workspace(base_url=base_url, token=token, workspace=workspace)
+
+    # Idempotent lookups/polls refresh-and-retry once on a 401 (e.g. the token
+    # expiring during a large upload); the upload itself is never auto-replayed.
+    def reauth(stale: str) -> str:
+        return refresh_now(base_url=base_url, stale_access_token=stale)
+
+    space = resolve_workspace(base_url=base_url, token=token, workspace=workspace, reauth=reauth)
 
     if update:
         outcome = _update(
@@ -85,6 +91,7 @@ def import_spec(
             source=source,
             data=data,
             spec_url=spec_url,
+            reauth=reauth,
         )
     else:
         outcome = _create(
@@ -306,9 +313,14 @@ def _update(
     source: str,
     data: bytes | None,
     spec_url: str | None,
+    reauth: Callable[[str], str] | None = None,
 ) -> _Outcome:
     target = resolve_collection(
-        base_url=base_url, token=token, company_id=company_id, collection=collection
+        base_url=base_url,
+        token=token,
+        company_id=company_id,
+        collection=collection,
+        reauth=reauth,
     )
     url = f"{base_url}/api/companies/{company_id}/collections/{target.id}"
     try:
@@ -342,6 +354,7 @@ def _update(
         token=token,
         company_id=company_id,
         collection_id=target.id,
+        reauth=reauth,
     )
     return _Outcome(target, doc, confirmed, mcps)
 
@@ -426,6 +439,7 @@ def _settled(
     token: str,
     company_id: str,
     collection_id: str,
+    reauth: Callable[[str], str] | None = None,
 ) -> tuple[dict[str, Any], bool, tuple[str, ...]]:
     """The collection once the server has caught up with the spec just sent,
     whether it was actually observed to catch up, and the MCP servers
@@ -448,7 +462,7 @@ def _settled(
     for delay in _SETTLE_DELAYS:
         time.sleep(delay)
         try:
-            body = get_json(url, token=token)
+            body = get_json(url, token=token, reauth=reauth)
         except (ApiError, HttpError):
             return latest, False, mcps
         doc = _document(body)

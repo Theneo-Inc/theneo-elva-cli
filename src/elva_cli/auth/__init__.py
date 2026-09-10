@@ -23,6 +23,7 @@ if TYPE_CHECKING:
         forget_stored_credentials,
         get_access_token,
         logout,
+        refresh_now,
         save_login,
         save_pat,
     )
@@ -34,6 +35,7 @@ __all__ = [
     "forget_stored_credentials",
     "get_access_token",
     "logout",
+    "refresh_now",
     "save_login",
     "save_pat",
 ]

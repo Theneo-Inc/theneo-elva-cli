@@ -13,11 +13,17 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+from elva_cli.core.api.identity import client_headers
 from elva_cli.errors import ApiError, AuthError, ElvaError
 
 if TYPE_CHECKING:
     import urllib.error
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
+
+# Only these methods are safe to auto-retry after a refresh: they're idempotent
+# and carry no body the server may have already acted on. A POST/PATCH that
+# reached the server must not be silently replayed (ELVA-200 CLI review).
+_RETRIABLE_METHODS = frozenset({"GET", "HEAD"})
 
 DEFAULT_TIMEOUT = 30.0
 UNEXPECTED_RESPONSE = "The server returned an unexpected response."
@@ -41,8 +47,14 @@ def default_error(error: HttpError, *, action: str) -> ElvaError:
     return ApiError(f"{action} failed (HTTP {error.status}).")
 
 
-def get_json(url: str, *, token: str, timeout: float = DEFAULT_TIMEOUT) -> Any:
-    return _send(url, token=token, method="GET", timeout=timeout)
+def get_json(
+    url: str,
+    *,
+    token: str,
+    timeout: float = DEFAULT_TIMEOUT,
+    reauth: Callable[[str], str] | None = None,
+) -> Any:
+    return _send(url, token=token, method="GET", timeout=timeout, reauth=reauth)
 
 
 def send_json(
@@ -52,6 +64,7 @@ def send_json(
     method: str,
     payload: Mapping[str, Any],
     timeout: float = DEFAULT_TIMEOUT,
+    reauth: Callable[[str], str] | None = None,
 ) -> Any:
     return _send(
         url,
@@ -60,6 +73,7 @@ def send_json(
         body=json.dumps(payload).encode("utf-8"),
         content_type="application/json",
         timeout=timeout,
+        reauth=reauth,
     )
 
 
@@ -167,11 +181,38 @@ def _send(
     body: bytes | None = None,
     content_type: str | None = None,
     timeout: float,
+    reauth: Callable[[str], str] | None = None,
+) -> Any:
+    try:
+        return _attempt(
+            url, token=token, method=method, body=body, content_type=content_type, timeout=timeout
+        )
+    except HttpError as exc:
+        # A 401 on a token that looked valid means the server rejected it
+        # (e.g. it expired mid-command, or a sibling process rotated it).
+        # Refresh once and retry - but only for idempotent methods, so a
+        # POST/PATCH that already reached the server is never replayed.
+        if exc.status != 401 or reauth is None or method.upper() not in _RETRIABLE_METHODS:
+            raise
+        fresh = reauth(token)
+        return _attempt(
+            url, token=fresh, method=method, body=body, content_type=content_type, timeout=timeout
+        )
+
+
+def _attempt(
+    url: str,
+    *,
+    token: str,
+    method: str,
+    body: bytes | None,
+    content_type: str | None,
+    timeout: float,
 ) -> Any:
     import urllib.error
     import urllib.request
 
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = {"Authorization": f"Bearer {token}", **client_headers()}
     if content_type is not None:
         headers["Content-Type"] = content_type
 
