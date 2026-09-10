@@ -119,11 +119,18 @@ def _validate_via_model(key: str, value: Any) -> Any:
     return getattr(settings, key)
 
 
-def _atomic_write(path: Path, text: str, *, file_mode: int, dir_mode: int) -> None:
+def _atomic_write(path: Path, text: str, *, file_mode: int, dir_mode: int | None) -> None:
     parent = path.parent
-    parent.mkdir(mode=dir_mode, parents=True, exist_ok=True)
-    with contextlib.suppress(OSError, NotImplementedError):
-        parent.chmod(dir_mode)
+    if dir_mode is None:
+        parent.mkdir(parents=True, exist_ok=True)
+    else:
+        try:
+            parent.mkdir(mode=dir_mode, parents=True, exist_ok=False)
+        except FileExistsError:
+            pass
+        else:
+            with contextlib.suppress(OSError, NotImplementedError):
+                parent.chmod(dir_mode)
 
     fd, tmp_name = tempfile.mkstemp(dir=parent, prefix=f".{path.name}.", suffix=".tmp")
     tmp_path = Path(tmp_name)
@@ -146,7 +153,7 @@ def _write_dict(kind: Target, path: Path, data: dict[str, Any]) -> None:
     if kind == "user":
         _atomic_write(path, text, file_mode=_USER_FILE_MODE, dir_mode=_USER_DIR_MODE)
     else:
-        _atomic_write(path, text, file_mode=_PROJECT_FILE_MODE, dir_mode=0o755)
+        _atomic_write(path, text, file_mode=_PROJECT_FILE_MODE, dir_mode=None)
 
 
 def set_value(*, key: str, value: str, target: WriteTarget) -> Any:
