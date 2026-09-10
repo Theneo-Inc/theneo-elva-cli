@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -121,10 +122,8 @@ def _validate_via_model(key: str, value: Any) -> Any:
 def _atomic_write(path: Path, text: str, *, file_mode: int, dir_mode: int) -> None:
     parent = path.parent
     parent.mkdir(mode=dir_mode, parents=True, exist_ok=True)
-    try:
-        os.chmod(parent, dir_mode)
-    except (OSError, NotImplementedError):
-        pass
+    with contextlib.suppress(OSError, NotImplementedError):
+        parent.chmod(dir_mode)
 
     fd, tmp_name = tempfile.mkstemp(dir=parent, prefix=f".{path.name}.", suffix=".tmp")
     tmp_path = Path(tmp_name)
@@ -133,16 +132,12 @@ def _atomic_write(path: Path, text: str, *, file_mode: int, dir_mode: int) -> No
             fh.write(text)
             fh.flush()
             os.fsync(fh.fileno())
-        try:
-            os.chmod(tmp_path, file_mode)
-        except (OSError, NotImplementedError):
-            pass
-        os.replace(tmp_path, path)
+        with contextlib.suppress(OSError, NotImplementedError):
+            tmp_path.chmod(file_mode)
+        tmp_path.replace(path)
     except BaseException:
-        try:
+        with contextlib.suppress(FileNotFoundError):
             tmp_path.unlink()
-        except FileNotFoundError:
-            pass
         raise
 
 

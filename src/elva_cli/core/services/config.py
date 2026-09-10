@@ -93,7 +93,9 @@ def read_setting(resolution: Resolution, key: str) -> SettingRead:
         raise ConfigError(f"unknown key {key!r}", hint=f"valid keys: {valid}")
     value = getattr(resolution.settings, key)
     if value is None:
-        raise ConfigError(f"{key!r} is not set", hint=f"Set it with 'elva config set {key} <value>'.")
+        raise ConfigError(
+            f"{key!r} is not set", hint=f"Set it with 'elva config set {key} <value>'."
+        )
     return SettingRead(key=key, value=value)
 
 
