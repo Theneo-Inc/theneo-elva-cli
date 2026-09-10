@@ -59,9 +59,6 @@ def _http_error(status: int, body: bytes = b"") -> urllib.error.HTTPError:
     )
 
 
-# --- the marker -----------------------------------------------------------
-
-
 class TestClientMarker:
     def test_refresh_sends_the_cli_marker(self, monkeypatch: pytest.MonkeyPatch) -> None:
         captured: dict[str, Any] = {}
@@ -91,9 +88,6 @@ class TestClientMarker:
         http.get_json(f"{BASE_URL}/api/auth/me", token="tok")
 
         assert captured["request"].get_header(CLIENT_HEADER.capitalize()) == "cli"
-
-
-# --- transient backoff + legacy mapping -----------------------------------
 
 
 class TestRefreshResilience:
@@ -143,9 +137,6 @@ class TestRefreshResilience:
         err = AuthError("Your session has expired.")
         assert err.exit_code == ExitCode.AUTH
         assert err.hint is not None and "elva auth login" in err.hint
-
-
-# --- forced refresh (used by the 401 retry) -------------------------------
 
 
 class TestRefreshNow:
@@ -205,9 +196,6 @@ class TestRefreshNow:
         assert session.refresh_now(base_url=BASE_URL, stale_access_token="stale") == "forced-new"
 
 
-# --- shared HTTP layer: 401 -> refresh -> retry once ----------------------
-
-
 class TestHttpRetry:
     @staticmethod
     def _opener(monkeypatch: pytest.MonkeyPatch, sequence: list[Any]) -> dict[str, list[str]]:
@@ -254,9 +242,6 @@ class TestHttpRetry:
                 f"{BASE_URL}/api/x", token="tok", method="POST", payload={}, reauth=reauth
             )
         assert called["reauth"] is False  # non-idempotent: never auto-replayed
-
-
-# --- crash-safe persistence -----------------------------------------------
 
 
 class TestCrashSafePersist:
