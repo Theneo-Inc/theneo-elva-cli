@@ -13,7 +13,13 @@ import pytest
 def run(
     *args: str, cwd: Path, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
-    full = {**os.environ, "XDG_CONFIG_HOME": str(cwd / "xdgconfig")}
+    isolated = cwd / "xdgconfig"
+    full = {
+        **os.environ,
+        "XDG_CONFIG_HOME": str(isolated),
+        "APPDATA": str(isolated),
+        "LOCALAPPDATA": str(isolated),
+    }
     full.update(env or {})
     return subprocess.run(
         [sys.executable, "-m", "elva_cli", *args],
