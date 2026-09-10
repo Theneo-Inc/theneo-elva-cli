@@ -20,7 +20,13 @@ if TYPE_CHECKING:
 TIMEOUT = 30
 NON_BLOCKING_EXIT_CODES = {ExitCode.OK, ExitCode.USAGE}
 NEEDS_AUTH: frozenset[tuple[str, ...]] = frozenset(
-    {("auth", "login"), ("auth", "register"), ("whoami",), ("workspace", "list")}
+    {
+        ("auth", "login"),
+        ("auth", "register"),
+        ("collection", "list"),
+        ("whoami",),
+        ("workspace", "list"),
+    }
 )
 
 

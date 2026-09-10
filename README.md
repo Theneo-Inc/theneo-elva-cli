@@ -159,6 +159,42 @@ count=$(elva --json import spec openapi.yaml | jq '.endpoints // 0')
 
 See [exit codes](docs/exit-codes.md) for the full table.
 
+## Listing collections
+
+See the collections in a workspace:
+
+```bash
+elva collection list
+```
+
+```
+ID                        NAME            SPEC  ENDPOINTS  UPDATED
+6aa1322d7ef06cc8f9017460  Payments API    yes          17  2026-08-30
+7bb2433e8f17ad91a0285713  Internal Tools  no            -  2026-09-02
+```
+
+`SPEC` says whether a spec has been uploaded yet, and `ENDPOINTS` is `-` until one has.
+Which workspace is listed comes from `--workspace` or `ELVA_WORKSPACE`; an account with a
+single workspace needs neither. Both are global flags, so they go before the subcommand.
+
+`--json` emits the raw array — one object per collection, no wrapper — for piping into `jq`:
+
+```bash
+elva --json collection list | jq -r '.[].name'
+```
+
+The exit code is the whole interface:
+
+```bash
+elva collection list
+case $? in
+  0) echo "listed" ;;
+  2) echo "no such workspace, or more than one and none chosen"; exit 1 ;;
+  3) echo "not signed in"; exit 1 ;;
+  5) echo "Elva unreachable"; exit 0 ;;
+esac
+```
+
 ## Configuration
 
 Settings can come from several places. Highest priority wins:

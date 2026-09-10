@@ -53,7 +53,11 @@ ELVA_AUTH: session expired
 - Where one exists, the next action to take.
 
 Codes currently defined: `ELVA_ERROR`, `ELVA_USAGE`, `ELVA_CONFIG`, `ELVA_AUTH`,
-`ELVA_VALIDATION`, `ELVA_API`, `ELVA_CRASH`.
+`ELVA_VALIDATION`, `ELVA_API`, `ELVA_CRASH`, `ELVA_AMBIGUOUS_COLLECTION`.
+
+`ELVA_AMBIGUOUS_COLLECTION` is a specialisation of `ELVA_USAGE` (exit `2`): a
+collection name matched more than one collection, so the reference was not enough
+to act on. Pass the id instead.
 
 ## Crash files
 
