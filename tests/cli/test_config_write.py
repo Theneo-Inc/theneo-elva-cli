@@ -17,8 +17,8 @@ def run(
     full = {
         **os.environ,
         "XDG_CONFIG_HOME": str(isolated),
-        "APPDATA": str(isolated),
-        "LOCALAPPDATA": str(isolated),
+        "WIN_PD_OVERRIDE_APPDATA": str(isolated),
+        "WIN_PD_OVERRIDE_LOCAL_APPDATA": str(isolated),
     }
     full.update(env or {})
     return subprocess.run(
