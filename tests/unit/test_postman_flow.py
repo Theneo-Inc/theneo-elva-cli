@@ -12,6 +12,8 @@ from typing import Any
 
 import pytest
 
+from elva_cli.commands import import_ as command
+from elva_cli.core.api.collections import endpoint_count
 from elva_cli.core.api.http import HttpError
 from elva_cli.core.api.targets import Target
 from elva_cli.core.services import import_postman as service
@@ -43,11 +45,40 @@ LISTED = {"collections": [PAYMENTS, BILLING]}
 UNREADABLE = {"status": "ok", "count": 1}
 IMPORTED = {"collection": {"id": CREATED_ID, "name": "Payments Platform API", "endpointCount": 17}}
 
+# The shape a real backend answers the import route with, captured against
+# prod: a batch, one entry per id sent, the document nested under "collection".
+RESULTS_IMPORTED = {
+    "results": [
+        {
+            "postmanCollectionId": PAYMENTS["uid"],
+            "status": "imported",
+            "collection": {
+                "id": CREATED_ID,
+                "name": "Payments Platform API",
+                "specTitle": "Payments Platform API",
+                "specVersion": "1.0.0",
+                "endpoints": [
+                    {"path": "/pay", "method": "get"},
+                    {"path": "/pay", "method": "post"},
+                ],
+            },
+        }
+    ]
+}
+
+
+def _results_failed(error: str, *, uid: str = BILLING["uid"]) -> dict[str, Any]:
+    return {"results": [{"postmanCollectionId": uid, "status": "failed", "error": error}]}
+
 
 @pytest.fixture
 def signed_in(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(service, "get_access_token", lambda *, base_url: "tok")
     monkeypatch.setattr(service, "resolve_workspace", lambda **_: Target(COMPANY, "Theneo"))
+    # The endpoint-settling poll re-reads the collection over real delays; the
+    # flow tests below are not about it, so it is stubbed out here and exercised
+    # on its own in TestEndpointsSettleAfterImport.
+    monkeypatch.setattr(service, "_settled", lambda doc, **_: doc)
 
 
 def calls(monkeypatch: pytest.MonkeyPatch, *responses: Any) -> list[dict[str, Any]]:
@@ -501,7 +532,6 @@ class TestThePicker:
     ) -> None:
         """Two collections can share a name, so a label built from the name
         alone would offer the same line twice with no way to tell them apart."""
-        from elva_cli.commands import import_ as command
 
         twin = PostmanCollection(uid="u-3333", name="Billing")
         found = [PostmanCollection(uid=BILLING["uid"], name="Billing"), twin]
@@ -521,7 +551,6 @@ class TestThePicker:
     def test_the_answer_maps_back_to_the_collection_it_names(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        from elva_cli.commands import import_ as command
 
         found = [
             PostmanCollection(uid=PAYMENTS["uid"], name="Payments Platform API"),
@@ -628,6 +657,14 @@ class TestTheImportRouteTakesAnArray:
             pytest.param({"imported": [{"id": CREATED_ID, "name": "Billing"}]}, id="imported"),
             pytest.param([{"id": CREATED_ID, "name": "Billing"}], id="bare-list"),
             pytest.param({"id": CREATED_ID, "name": "Billing"}, id="bare-doc"),
+            pytest.param(
+                {
+                    "results": [
+                        {"status": "imported", "collection": {"id": CREATED_ID, "name": "Billing"}}
+                    ]
+                },
+                id="results-batch",
+            ),
         ],
     )
     def test_the_created_collection_is_found_whatever_shape_it_comes_back_in(
@@ -645,6 +682,159 @@ class TestTheImportRouteTakesAnArray:
         calls(monkeypatch, LISTED, {"collections": []})
         with pytest.raises(ApiError):
             service.import_postman(base_url=BASE_URL, api_key=KEY, collection="Billing")
+
+
+class TestTheResultsBatchReply:
+    """The shape a real backend actually sends: {"results": [{status,
+    collection}]}. The document is nested a level down, and a rejected item
+    carries its reason inline instead of as an HTTP error."""
+
+    def test_the_nested_document_is_read_straight_from_the_reply(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None
+    ) -> None:
+        def no_lookup(*a: Any, **k: Any) -> Any:
+            raise AssertionError("the reply carried the collection; nothing to look up")
+
+        monkeypatch.setattr(service, "get_json", no_lookup)
+        calls(monkeypatch, LISTED, RESULTS_IMPORTED)
+        result = service.import_postman(
+            base_url=BASE_URL, api_key=KEY, collection="Payments Platform API"
+        )
+        assert result.collection_id == CREATED_ID
+        assert result.endpoints == 2
+
+    def test_a_by_id_import_reads_the_results_reply_without_a_name(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None
+    ) -> None:
+        """The bug this fixes: addressed by id, the CLI never learned a name,
+        so a reply it could not parse left it with nothing to report -- even
+        though the import had succeeded."""
+
+        def no_lookup(*a: Any, **k: Any) -> Any:
+            raise AssertionError("should not need a lookup")
+
+        monkeypatch.setattr(service, "get_json", no_lookup)
+        calls(monkeypatch, RESULTS_IMPORTED)
+        result = service.import_postman(base_url=BASE_URL, api_key=KEY, collection=PAYMENTS["uid"])
+        assert result.collection_id == CREATED_ID
+        assert result.postman_collection is None
+
+    def test_a_failed_entry_is_raised_not_chased_with_a_lookup(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None
+    ) -> None:
+        def no_lookup(*a: Any, **k: Any) -> Any:
+            raise AssertionError("a rejected import has nothing to look up")
+
+        monkeypatch.setattr(service, "get_json", no_lookup)
+        calls(monkeypatch, LISTED, _results_failed('A collection named "Billing" already exists'))
+        with pytest.raises(UsageError, match="already exists") as caught:
+            service.import_postman(base_url=BASE_URL, api_key=KEY, collection="Billing")
+        assert caught.value.exit_code == ExitCode.USAGE
+
+    def test_a_failed_entry_that_is_not_a_conflict_is_a_validation_error(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None
+    ) -> None:
+        calls(monkeypatch, LISTED, _results_failed("The Postman collection could not be parsed"))
+        with pytest.raises(ValidationError, match="could not be parsed") as caught:
+            service.import_postman(base_url=BASE_URL, api_key=KEY, collection="Billing")
+        assert caught.value.exit_code == ExitCode.VALIDATION
+
+
+class TestEndpointsSettleAfterImport:
+    """The import route answers before it has finished reading requests out of
+    the Postman collection, so its reply can say 0 endpoints for one that has
+    six a second later -- which reads as an empty import. The count is settled
+    by re-reading the collection (the same race import_spec._settled handles)."""
+
+    @staticmethod
+    def _no_sleep(monkeypatch: pytest.MonkeyPatch) -> None:
+        import time
+
+        monkeypatch.setattr(time, "sleep", lambda _seconds: None)
+
+    def _run(
+        self, monkeypatch: pytest.MonkeyPatch, imported: dict[str, Any], *reads: Any
+    ) -> dict[str, Any]:
+        self._no_sleep(monkeypatch)
+        queue = list(reads)
+
+        def fake_get(url: str, **_: Any) -> Any:
+            reply = queue.pop(0) if queue else reads[-1]
+            if isinstance(reply, Exception):
+                raise reply
+            return reply
+
+        monkeypatch.setattr(service, "get_json", fake_get)
+        return service._settled(
+            imported, base_url=BASE_URL, token="t", company_id=COMPANY, collection_id=CREATED_ID
+        )
+
+    @staticmethod
+    def _doc(endpoints: int) -> dict[str, Any]:
+        inner = {"id": CREATED_ID, "name": "Bug Testing", "endpoints": [{}] * endpoints}
+        return {"collection": inner}
+
+    def test_a_zero_endpoint_reply_is_re_read_until_a_count_holds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        doc = self._run(
+            monkeypatch,
+            {"id": CREATED_ID, "name": "Bug Testing", "endpoints": []},
+            self._doc(3),  # extraction still running
+            self._doc(6),  # done -- but not yet confirmed
+            self._doc(6),  # holds -> settled
+        )
+        assert endpoint_count(doc) == 6
+
+    def test_a_reply_that_already_carries_a_count_is_not_polled(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        def no_read(*a: Any, **k: Any) -> Any:
+            raise AssertionError("the reply had a count; nothing to poll")
+
+        monkeypatch.setattr(service, "get_json", no_read)
+        doc = service._settled(
+            {"id": CREATED_ID, "endpoints": [{}, {}]},
+            base_url=BASE_URL,
+            token="t",
+            company_id=COMPANY,
+            collection_id=CREATED_ID,
+        )
+        assert endpoint_count(doc) == 2
+
+    def test_a_collection_that_stays_empty_settles_to_zero_without_hanging(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        original = {"id": CREATED_ID, "endpoints": []}
+        doc = self._run(monkeypatch, original, *([self._doc(0)] * 4))
+        assert endpoint_count(doc) == 0
+
+    def test_a_failed_re_read_falls_back_to_the_import_reply(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        original = {"id": CREATED_ID, "name": "Bug Testing", "endpoints": []}
+        assert self._run(monkeypatch, original, HttpError(500, None)) is original
+
+    def test_the_import_flow_reports_the_settled_count(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        self._no_sleep(monkeypatch)
+        monkeypatch.setattr(service, "get_access_token", lambda *, base_url: "tok")
+        monkeypatch.setattr(service, "resolve_workspace", lambda **_: Target(COMPANY, "Theneo"))
+        calls(
+            monkeypatch,
+            {
+                "results": [
+                    {
+                        "status": "imported",
+                        "collection": {"id": CREATED_ID, "name": "Bug Testing", "endpoints": []},
+                    }
+                ]
+            },
+        )
+        monkeypatch.setattr(service, "get_json", lambda *a, **k: self._doc(6))
+        result = service.import_postman(base_url=BASE_URL, api_key=KEY, collection=PAYMENTS["uid"])
+        assert result.endpoints == 6
 
 
 class TestASuccessfulImportIsNeverReportedAsAFailure:
@@ -806,6 +996,27 @@ class TestTheResultsShapeIsRead:
         calls(monkeypatch, LISTED, HttpError(400, "collectionIds must be an array"))
         with pytest.raises(ValidationError):
             service.import_postman(base_url=BASE_URL, api_key=KEY, collection="Billing")
+
+    def test_a_by_id_duplicate_is_a_usage_error_even_without_a_name_to_match(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None
+    ) -> None:
+        """Addressed by id, the CLI's only "name" for the collection is the id
+        itself, so _named_conflict cannot fire -- but "a collection ... already
+        exists" is still unambiguously a rename, not a bad request (exit 4)."""
+        detail = 'A collection named "Billing" already exists'
+        calls(monkeypatch, HttpError(400, detail))
+        with pytest.raises(UsageError, match="already exists") as caught:
+            service.import_postman(base_url=BASE_URL, api_key=KEY, collection=BILLING["uid"])
+        assert caught.value.exit_code == ExitCode.USAGE
+
+    def test_an_unrelated_already_exists_400_still_needs_the_word_collection(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None
+    ) -> None:
+        """The by-id fallback keys on "collection" + "already exists"; a phrase
+        about something else is left as the validation error it is."""
+        calls(monkeypatch, HttpError(400, "a workspace limit already exists for this plan"))
+        with pytest.raises(ValidationError, match="workspace limit"):
+            service.import_postman(base_url=BASE_URL, api_key=KEY, collection=BILLING["uid"])
 
 
 class TestANameMatchIsRequiredNotJustThePhrase:

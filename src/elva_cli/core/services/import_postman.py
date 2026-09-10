@@ -52,6 +52,12 @@ if TYPE_CHECKING:
 
 _HTTP_TIMEOUT = 120.0
 
+# The import route answers before it has finished reading requests out of the
+# Postman collection, so its reply can say 0 endpoints for one that has plenty
+# a moment later (the same race import_spec._settled handles for a spec). Re-read
+# the collection on this schedule until a count settles.
+_SETTLE_DELAYS = (0.3, 0.7, 1.5, 3.0)
+
 _KEY_FIELD = "apiKey"
 _COLLECTION_FIELD = "collectionIds"
 
@@ -119,13 +125,15 @@ def import_postman(
         key_proven=listed,
     )
 
-    read = _document(body)
-    found_id = find_id(read) if read is not None else None
-    if read is not None and found_id is not None:
-        doc, collection_id = read, found_id
-    else:
+    doc = _import_outcome(body, chosen=chosen)
+    collection_id = find_id(doc) if doc is not None else None
+    if doc is None or collection_id is None:
         doc = _look_up(base_url=base_url, token=token, company_id=space.id, name=postman_name)
         collection_id = require_id(doc, message=_UNEXPECTED_RESPONSE)
+
+    doc = _settled(
+        doc, base_url=base_url, token=token, company_id=space.id, collection_id=collection_id
+    )
     return PostmanImportResult(
         collection=text(doc.get("name")) or chosen.name,
         collection_id=collection_id,
@@ -372,6 +380,106 @@ def _first(rows: list[Any]) -> dict[str, Any] | None:
     return next((row for row in rows if isinstance(row, dict)), None)
 
 
+def _import_outcome(body: Any, *, chosen: PostmanCollection) -> dict[str, Any] | None:
+    """The created collection out of the import route's reply.
+
+    The route answers a batch: ``{"results": [{postmanCollectionId, status,
+    collection}]}`` -- one entry, because only one id is ever sent. ``status``
+    is ``"imported"`` on success with the document nested under ``collection``;
+    a rejected item carries an ``error`` string (and, for a name clash, arrives
+    under HTTP 400 -- see ``_import_error``). A rejection is raised here rather
+    than chased with a lookup. Older/sibling shapes (``{"collection": {...}}``,
+    a bare document) still fall through to ``_document``.
+    """
+    entry = _result_entry(body)
+    if entry is not None:
+        inner = entry.get("collection")
+        if isinstance(inner, dict):
+            return inner
+        reason = text(entry.get("error"))
+        if reason is not None:
+            raise _import_rejected(reason)
+        status = (text(entry.get("status")) or "").lower()
+        if status and status != "imported":
+            raise _import_rejected(f"Postman import did not complete (status {status!r}).")
+    return _document(body)
+
+
+def _result_entry(body: Any) -> dict[str, Any] | None:
+    """The single result out of a ``{"results": [...]}`` batch reply."""
+    rows = body.get("results") if isinstance(body, dict) else None
+    return _first(rows) if isinstance(rows, list) else None
+
+
+def _settled(
+    doc: dict[str, Any],
+    *,
+    base_url: str,
+    token: str,
+    company_id: str,
+    collection_id: str,
+) -> dict[str, Any]:
+    """The collection once endpoint extraction has caught up with the import.
+
+    The import route builds its reply before it has finished reading requests
+    out of the Postman collection, so ``doc`` can carry 0 endpoints for a
+    collection that has plenty a second later -- reported, that reads as an
+    empty import. Re-read the collection until a count shows up and holds for
+    two consecutive reads. Best effort: the import already succeeded, so a
+    failed poll just means reporting the count the reply came with.
+    """
+    import time
+
+    if endpoint_count(doc):
+        return doc
+
+    url = f"{base_url}/api/companies/{company_id}/collections/{collection_id}"
+    latest, previous = doc, endpoint_count(doc)
+    for delay in _SETTLE_DELAYS:
+        time.sleep(delay)
+        try:
+            fetched = _document(get_json(url, token=token))
+        except (ApiError, HttpError):
+            return latest
+        if fetched is None:
+            continue
+        latest = fetched
+        count = endpoint_count(fetched)
+        if count and count == previous:
+            return fetched
+        previous = count
+    return latest
+
+
+def _import_rejected(reason: str) -> ElvaError:
+    """A results entry the server marked failed. A name clash is a usage error
+    (rename one); anything else is the input being wrong (exit 4)."""
+    if _collection_conflict(reason) is not None:
+        return UsageError(
+            reason, hint="Rename the existing one, or rename the collection in Postman."
+        )
+    return ValidationError(reason)
+
+
+def _collection_conflict(detail: str | None) -> str | None:
+    """``detail`` when it says a collection already exists -- without needing
+    this collection's name to appear in it.
+
+    ``_named_conflict`` requires the name as a guard against an unrelated 400
+    that merely contains "already exists"; that guard cannot work for an import
+    addressed by id, where the only name the CLI holds is the id itself. Keying
+    on "collection" plus "already exists" keeps the unrelated-phrase protection
+    -- "a workspace limit already exists for this plan" names no collection --
+    while letting a by-id duplicate reach the same usage error.
+    """
+    if not detail:
+        return None
+    lowered = detail.lower()
+    if "already exists" in lowered and "collection" in lowered:
+        return detail
+    return None
+
+
 def _look_up(*, base_url: str, token: str, company_id: str, name: str | None) -> dict[str, Any]:
     """The collection the import just made, found by name instead of read out
     of the reply.
@@ -426,7 +534,7 @@ def _import_error(
             f"a collection named {chosen.name!r} already exists in Elva",
             hint="Rename the existing one, or rename the collection in Postman.",
         )
-    conflict = _named_conflict(error.detail, name=chosen.name)
+    conflict = _named_conflict(error.detail, name=chosen.name) or _collection_conflict(error.detail)
     if conflict is not None:
         return UsageError(
             conflict, hint="Rename the existing one, or rename the collection in Postman."
