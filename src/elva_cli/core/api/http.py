@@ -60,12 +60,13 @@ def get_json(
 def send_json(
     url: str,
     *,
-    token: str,
+    token: str | None,
     method: str,
     payload: Mapping[str, Any],
     timeout: float = DEFAULT_TIMEOUT,
     reauth: Callable[[str], str] | None = None,
 ) -> Any:
+    """`token=None` sends no Authorization header, for Elva's few public routes."""
     return _send(
         url,
         token=token,
@@ -176,7 +177,7 @@ def _opener() -> Any:
 def _send(
     url: str,
     *,
-    token: str,
+    token: str | None,
     method: str,
     body: bytes | None = None,
     content_type: str | None = None,
@@ -192,7 +193,12 @@ def _send(
         # (e.g. it expired mid-command, or a sibling process rotated it).
         # Refresh once and retry - but only for idempotent methods, so a
         # POST/PATCH that already reached the server is never replayed.
-        if exc.status != 401 or reauth is None or method.upper() not in _RETRIABLE_METHODS:
+        if (
+            exc.status != 401
+            or reauth is None
+            or token is None
+            or method.upper() not in _RETRIABLE_METHODS
+        ):
             raise
         fresh = reauth(token)
         return _attempt(
@@ -203,7 +209,7 @@ def _send(
 def _attempt(
     url: str,
     *,
-    token: str,
+    token: str | None,
     method: str,
     body: bytes | None,
     content_type: str | None,
@@ -212,7 +218,9 @@ def _attempt(
     import urllib.error
     import urllib.request
 
-    headers = {"Authorization": f"Bearer {token}", **client_headers()}
+    headers = dict(client_headers())
+    if token is not None:
+        headers["Authorization"] = f"Bearer {token}"
     if content_type is not None:
         headers["Content-Type"] = content_type
 

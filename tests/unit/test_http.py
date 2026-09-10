@@ -187,6 +187,12 @@ class TestRedirects:
         base, _thread, _ = self._serve(302, "/unused")
         assert send_json(f"{base}/plain", token="t", method="POST", payload={}) == {"ok": True}
 
+    def test_token_none_sends_no_authorization_header(self) -> None:
+        """Elva's public routes (e.g. /api/fetch-file) take no bearer token."""
+        base, _thread, leaked = self._serve(200, "/unused")
+        assert send_json(f"{base}/plain", token=None, method="POST", payload={}) == {"ok": True}
+        assert leaked == [""]
+
 
 class TestErrorDetailShapes:
     """A validation layer rarely answers with a flat string, and losing its

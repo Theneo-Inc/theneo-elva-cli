@@ -74,22 +74,24 @@ elva import spec openapi.yaml --name "Payments v2"
 
 ### Where the spec comes from
 
-A path, a URL Elva fetches itself, or stdin:
+A path, a URL, or stdin:
 
 ```bash
 elva import spec openapi.yaml
 ```
 
 ```bash
-elva import spec --url https://example.com/openapi.yaml --name Payments
+elva import spec --url https://example.com/openapi.yaml
 ```
 
 ```bash
 curl -s https://example.com/openapi.yaml | elva import spec - --name Payments
 ```
 
-A URL is fetched server-side, so nothing is read locally -- which is why `--name` cannot
-be defaulted from it. Files must be `.json`, `.yaml` or `.yml`, and 10 MB or smaller.
+A `--url` is fetched through Elva -- the same proxy the web app uses, so a spec host only
+Elva can reach still works -- and then imported like a file, so `--name` defaults from its
+`info.title` too. A JSON spec is stored as YAML whichever way it came in, matching the web
+app. Files must be `.json`, `.yaml` or `.yml`, and 10 MB or smaller.
 
 ### Updating an existing collection
 

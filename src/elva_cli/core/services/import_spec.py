@@ -15,10 +15,12 @@ from elva_cli.core.api.collections import (
     require_id,
     text,
 )
-from elva_cli.core.api.http import HttpError, default_error, get_json, send_form, send_json
+from elva_cli.core.api.http import HttpError, default_error, get_json, send_form
 from elva_cli.core.api.targets import Target, resolve_collection, resolve_workspace
 from elva_cli.core.services.import_result import Action, DryRunResult, ImportSpecResult
 from elva_cli.core.spec.detect import FORMATS, SpecFormat, SpecMeta, detect_format, read_meta
+from elva_cli.core.spec.fetch import SpecFetchError, fetch_spec
+from elva_cli.core.spec.normalize import to_yaml
 from elva_cli.errors import ApiError, ElvaError, UsageError, ValidationError
 
 if TYPE_CHECKING:
@@ -26,6 +28,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 _HTTP_TIMEOUT = 120.0
+_URL_FETCH_TIMEOUT = 30.0
 
 MAX_BYTES = 10 * 1024 * 1024
 MAX_NAME = 100
@@ -60,7 +63,7 @@ def import_spec(
     dry_run: bool = False,
 ) -> ImportSpecResult | DryRunResult:
     """Create a collection from a spec, or update one with --update."""
-    source, data = _read_source(path=path, stdin=stdin, spec_url=spec_url)
+    source, data = _read_source(path=path, stdin=stdin, spec_url=spec_url, base_url=base_url)
     resolved, meta = _inspect(data, spec_format, source)
     action = Action.UPDATED if update else Action.CREATED
     target_name = _target_name(
@@ -76,7 +79,7 @@ def import_spec(
             endpoints=meta.endpoints,
             spec_title=meta.title,
             spec_version=meta.version,
-            size_bytes=len(data) if data is not None else None,
+            size_bytes=len(data),
         )
 
     token = get_access_token(base_url=base_url)
@@ -96,7 +99,6 @@ def import_spec(
             collection=target_name,
             source=source,
             data=data,
-            spec_url=spec_url,
             reauth=reauth,
         )
     else:
@@ -107,7 +109,6 @@ def import_spec(
             name=target_name,
             source=source,
             data=data,
-            spec_url=spec_url,
         )
 
     doc = outcome.doc
@@ -128,27 +129,32 @@ def import_spec(
 
 
 def _read_source(
-    *, path: Path | None, stdin: bytes | None, spec_url: str | None
-) -> tuple[str, bytes | None]:
-    """The spec's display name, and its bytes when we hold them.
+    *, path: Path | None, stdin: bytes | None, spec_url: str | None, base_url: str
+) -> tuple[str, bytes]:
+    """The spec's display name and its bytes.
 
-    A URL is fetched server-side, so there is nothing local to read -- which is
-    also why --name cannot be defaulted from it.
+    A URL is fetched through Elva's proxy -- the same path the web app uses --
+    so the bytes come back here to be converted and named like a local file,
+    rather than the server being handed a link.
     """
     given = [given for given in (path, stdin, spec_url) if given is not None]
     if len(given) != 1:
         raise UsageError(
             "give exactly one of FILE, --url or -",
-            hint="A path uploads the file, --url has the server fetch it, - reads stdin.",
+            hint="A path uploads the file, --url has Elva fetch it, - reads stdin.",
         )
 
     if spec_url is not None:
         if not spec_url.startswith(("http://", "https://")):
             raise UsageError(f"--url must start with http:// or https://, got {spec_url!r}")
-        return spec_url, None
+        try:
+            fetched = fetch_spec(base_url=base_url, url=spec_url, timeout=_URL_FETCH_TIMEOUT)
+        except SpecFetchError as exc:
+            raise UsageError(str(exc)) from exc
+        return spec_url, _checked(to_yaml(fetched), spec_url)
 
     if stdin is not None:
-        return _STDIN_SOURCE, _checked(stdin, _STDIN_SOURCE)
+        return _STDIN_SOURCE, _checked(to_yaml(stdin), _STDIN_SOURCE)
 
     assert path is not None
     if path.is_dir():
@@ -170,21 +176,18 @@ def _read_source(
         ) from exc
     except OSError as exc:
         raise UsageError(f"cannot read {path}: {exc}") from exc
-    return path.name, _checked(data, path.name)
+    return path.name, _checked(to_yaml(data), path.name)
 
 
 def _checked(data: bytes, source: str) -> bytes:
     if not data.strip():
         raise UsageError(f"{source} is empty")
     if len(data) > MAX_BYTES:
-        raise UsageError(
-            f"{source} is {len(data) / 1024 / 1024:.1f} MB; the limit is 10 MB",
-            hint="Split the spec, or import it with --url so the server fetches it.",
-        )
+        raise UsageError(f"{source} is {len(data) / 1024 / 1024:.1f} MB; the limit is 10 MB")
     return data
 
 
-def _inspect(data: bytes | None, requested: str | None, source: str) -> tuple[SpecFormat, SpecMeta]:
+def _inspect(data: bytes, requested: str | None, source: str) -> tuple[SpecFormat, SpecMeta]:
     """Format and whatever the document says about itself.
 
     Detection runs even when --format was given: the flag settles what an
@@ -194,8 +197,6 @@ def _inspect(data: bytes | None, requested: str | None, source: str) -> tuple[Sp
     declared = _declared(requested)
     if declared is SpecFormat.POSTMAN:
         raise _postman_error(source)
-    if data is None:
-        return declared or SpecFormat.OPENAPI, SpecMeta()
 
     detected = detect_format(data)
     if detected is SpecFormat.POSTMAN:
@@ -278,34 +279,23 @@ def _create(
     company_id: str,
     name: str,
     source: str,
-    data: bytes | None,
-    spec_url: str | None,
+    data: bytes,
 ) -> _Outcome:
     """POST a new collection. The route awaits its metadata extraction and
     re-reads before answering, so this reply is already correct."""
     url = f"{base_url}/api/companies/{company_id}/collections"
     try:
-        if data is None:
-            assert spec_url is not None
-            body = send_json(
-                url,
-                token=token,
-                method="POST",
-                payload={"name": name, "specUrl": spec_url},
-                timeout=_HTTP_TIMEOUT,
-            )
-        else:
-            body = send_form(
-                url,
-                token=token,
-                method="POST",
-                fields={"name": name},
-                field=_FIELD,
-                filename=_upload_name(source),
-                data=data,
-                content_type=_content_type(data),
-                timeout=_HTTP_TIMEOUT,
-            )
+        body = send_form(
+            url,
+            token=token,
+            method="POST",
+            fields={"name": name},
+            field=_FIELD,
+            filename=_upload_name(source, data),
+            data=data,
+            content_type=_content_type(data),
+            timeout=_HTTP_TIMEOUT,
+        )
     except HttpError as exc:
         raise _create_error(exc, name=name) from exc
 
@@ -326,8 +316,7 @@ def _update(
     company_id: str,
     collection: str,
     source: str,
-    data: bytes | None,
-    spec_url: str | None,
+    data: bytes,
     reauth: Callable[[str], str] | None = None,
 ) -> _Outcome:
     target = resolve_collection(
@@ -339,27 +328,17 @@ def _update(
     )
     url = f"{base_url}/api/companies/{company_id}/collections/{target.id}"
     try:
-        if data is None:
-            assert spec_url is not None
-            body = send_json(
-                url,
-                token=token,
-                method="PATCH",
-                payload={"specUrl": spec_url},
-                timeout=_HTTP_TIMEOUT,
-            )
-        else:
-            body = send_form(
-                url,
-                token=token,
-                method="PATCH",
-                fields={},
-                field=_FIELD,
-                filename=_upload_name(source),
-                data=data,
-                content_type=_content_type(data),
-                timeout=_HTTP_TIMEOUT,
-            )
+        body = send_form(
+            url,
+            token=token,
+            method="PATCH",
+            fields={},
+            field=_FIELD,
+            filename=_upload_name(source, data),
+            data=data,
+            content_type=_content_type(data),
+            timeout=_HTTP_TIMEOUT,
+        )
     except HttpError as exc:
         raise _update_error(exc, collection=target.name) from exc
 
@@ -374,15 +353,18 @@ def _update(
     return _Outcome(target, doc, confirmed, mcps)
 
 
-def _upload_name(source: str) -> str:
+def _upload_name(source: str, data: bytes) -> str:
     """A filename for the multipart part.
 
     The route's fileFilter accepts on media type and only falls back to the
     extension when that type is generic (octet-stream, text/plain, empty).
     _content_type always sends a specific one, so this name is never what
-    decides acceptance -- stdin just needs to send something.
+    decides acceptance. A local file keeps its own name; stdin and a URL get
+    one whose extension matches the bytes actually going up.
     """
-    return "spec.json" if source == _STDIN_SOURCE else source
+    if source != _STDIN_SOURCE and "://" not in source:
+        return source
+    return "spec.json" if data.lstrip()[:1] in (b"{", b"[") else "spec.yaml"
 
 
 def _content_type(data: bytes) -> str:

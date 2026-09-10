@@ -19,6 +19,14 @@
 - Refresh continues to happen proactively ~60s before the access token expires
   and to persist the rotated token atomically (temp file + rename, 0600) before
   the response is used — unchanged, but now covered by explicit tests.
+- **`elva import spec --url` now fetches through Elva and uploads like a file.**
+  The URL is fetched via Elva's `fetch-file` proxy (the same path the web app
+  uses, so a spec host only Elva can reach still works), a JSON spec is stored
+  as YAML to match a web-app import instead of one minified line, and `--name`
+  now defaults from the fetched spec's `info.title`. `--dry-run --url` reports
+  the real title/version/endpoint count/size, and a spec URL that 404s or times
+  out is now a usage error (exit 2) rather than a late server rejection. Local
+  `.json` files are converted to YAML on import for the same consistency.
 
 ### Compatibility
 This version works with **both** the flagged and the unflagged backend:
