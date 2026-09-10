@@ -40,6 +40,12 @@ class HttpError(Exception):
         self.detail = detail
 
 
+class UnreachableError(ApiError):
+    """The server could not be reached at all
+    DNS, connection refused, timeout, or a reset mid-response
+    """
+
+
 def default_error(error: HttpError, *, action: str) -> ElvaError:
     """The mapping every caller shares. `action` completes "... failed"."""
     if error.status in (401, 403):
@@ -229,7 +235,7 @@ def _attempt(
         # part-way through reading the response is neither -- it arrives raw
         # from the socket, and catching only those two lets it out as an
         # unhandled traceback under exit 1 instead of a reachability failure.
-        raise ApiError("Could not reach the server.") from exc
+        raise UnreachableError("Could not reach the server.") from exc
 
     if not raw:
         return None

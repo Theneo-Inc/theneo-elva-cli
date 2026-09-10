@@ -11,8 +11,15 @@ from urllib.parse import quote
 from elva_cli.auth import get_access_token, refresh_now
 from elva_cli.core.api.http import HttpError, default_error, get_json
 from elva_cli.core.api.targets import resolve_workspace
+from elva_cli.core.services.mcp_common import (
+    as_int,
+    as_opt_str,
+    as_str,
+    unknown_server,
+    workspace_forbidden,
+)
 from elva_cli.core.services.mcp_result import McpListResult, McpServer, McpShowResult
-from elva_cli.errors import ApiError, UsageError
+from elva_cli.errors import ApiError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -67,11 +74,11 @@ def _rows(body: Any) -> list[dict[str, Any]]:
 
 def _to_summary(row: dict[str, Any]) -> McpServer:
     return McpServer(
-        slug=_str(row.get("mcpSlug")),
-        name=_str(row.get("mcpName")),
-        status=_str(row.get("status")),
-        tool_count=_int(row.get("toolCount")),
-        collection_id=_opt_str(row.get("collectionId")),
+        slug=as_str(row.get("mcpSlug")),
+        name=as_str(row.get("mcpName")),
+        status=as_str(row.get("status")),
+        tool_count=as_int(row.get("toolCount")),
+        collection_id=as_opt_str(row.get("collectionId")),
     )
 
 
@@ -81,24 +88,24 @@ def _to_detail(row: dict[str, Any]) -> McpServer:
 
     collection_raw = row.get("collection")
     collection_name = (
-        _opt_str(collection_raw.get("name")) if isinstance(collection_raw, dict) else None
+        as_opt_str(collection_raw.get("name")) if isinstance(collection_raw, dict) else None
     )
 
     operations = row.get("selectedOperations")
     has_secret = auth_config.get("hasSecret")
 
     return McpServer(
-        slug=_str(row.get("mcpSlug")),
-        name=_str(row.get("mcpName")),
-        status=_str(row.get("status")),
-        tool_count=_int(row.get("toolCount")),
-        collection_id=_opt_str(row.get("collectionId")),
-        deployment_id=_opt_str(row.get("deploymentId")),
+        slug=as_str(row.get("mcpSlug")),
+        name=as_str(row.get("mcpName")),
+        status=as_str(row.get("status")),
+        tool_count=as_int(row.get("toolCount")),
+        collection_id=as_opt_str(row.get("collectionId")),
+        deployment_id=as_opt_str(row.get("deploymentId")),
         collection_name=collection_name,
-        auth_type=_opt_str(auth_config.get("type")),
+        auth_type=as_opt_str(auth_config.get("type")),
         has_secret=has_secret if isinstance(has_secret, bool) else None,
         selected_operations=tuple(operations) if isinstance(operations, list) else None,
-        version=_opt_str(row.get("version")),
+        version=as_opt_str(row.get("version")),
         runtime_url=_runtime_url(row),
     )
 
@@ -116,36 +123,15 @@ def _runtime_url(row: dict[str, Any]) -> str | None:
     return f"{base.rstrip('/')}/mcp/{slug}"
 
 
-def _int(value: Any) -> int:
-    return value if isinstance(value, int) and not isinstance(value, bool) else 0
-
-
-def _str(value: Any) -> str:
-    return value if isinstance(value, str) else ""
-
-
-def _opt_str(value: Any) -> str | None:
-    return value if isinstance(value, str) and value else None
-
-
 def _list_error(error: HttpError) -> Exception:
     if error.status == 403:
-        return UsageError(
-            "you don't have access to this workspace",
-            hint="Check --workspace.",
-        )
+        return workspace_forbidden()
     return default_error(error, action="Listing MCP servers")
 
 
 def _show_error(error: HttpError, *, slug: str) -> Exception:
     if error.status in (400, 404):
-        return UsageError(
-            f"no MCP server named {slug!r} in this workspace",
-            hint="Run 'elva mcp list' to see what exists.",
-        )
+        return unknown_server(slug)
     if error.status == 403:
-        return UsageError(
-            "you don't have access to this workspace",
-            hint="Check --workspace.",
-        )
+        return workspace_forbidden()
     return default_error(error, action="Looking up that MCP server")
