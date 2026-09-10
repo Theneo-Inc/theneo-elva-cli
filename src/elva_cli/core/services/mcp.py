@@ -19,7 +19,7 @@ from elva_cli.core.services.mcp_common import (
     workspace_forbidden,
 )
 from elva_cli.core.services.mcp_result import McpListResult, McpServer, McpShowResult
-from elva_cli.errors import ApiError
+from elva_cli.errors import ApiError, UsageError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -121,6 +121,18 @@ def _runtime_url(row: dict[str, Any]) -> str | None:
     if not isinstance(slug, str) or not slug:
         return None
     return f"{base.rstrip('/')}/mcp/{slug}"
+
+
+def _int(value: Any) -> int:
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _str(value: Any) -> str:
+    return value if isinstance(value, str) else ""
+
+
+def _opt_str(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
 
 
 def _list_error(error: HttpError) -> Exception:
