@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from elva_cli.core.api.http import HttpError, default_error, get_json
+from elva_cli.core.openapi_ops import Operation, extract_operations, parse_spec
 from elva_cli.errors import ApiError, AuthError, ElvaError, UsageError
 
 
@@ -164,6 +165,69 @@ def get_collection(base_url: str, token: str, company_id: str, ref: str) -> Coll
         updated_at=_timestamp(doc, "updatedAt", "_updatedAt"),
         mcps=_mcps(payload),
     )
+
+
+def get_collection_operations(
+    base_url: str, token: str, company_id: str, ref: str
+) -> list[Operation]:
+    """The operations in a collection's uploaded OpenAPI spec.
+
+    Resolves `ref` (name or id) to its collection, fetches the raw spec file the
+    backend stored, and reads the operations out of it. "Endpoints" here means
+    exactly the operations in that spec -- not the GitHub-scanner catalogue that
+    a separate route exposes.
+
+    The error line is the point of this function. A parse failure is exit 4 (the
+    spec is wrong); an unreachable server or a spec the backend cannot fetch from
+    storage is exit 5 (the transport is wrong). The two never cross: SpecInvalid
+    only comes from parse_spec, and every HTTP/connection failure maps to 5 (or 2
+    when the collection simply has no spec, or 3 when the token is rejected).
+    """
+    summary = resolve_collection(base_url, token, company_id, ref)
+    url = f"{base_url}/api/companies/{company_id}/collections/{summary.id}/spec"
+    try:
+        payload = get_json(url, token=token)
+    except HttpError as exc:
+        raise _spec_error(exc, name=summary.name) from exc
+
+    return extract_operations(parse_spec(_spec_text(payload)))
+
+
+def _spec_text(payload: Any) -> str:
+    """The raw spec out of a {"spec": "<text>"} envelope.
+
+    A response that is not that shape is a server fault, not a bad spec, so it is
+    an ApiError (exit 5) -- keeping the exit-4 line reserved for parse failures.
+    """
+    if isinstance(payload, dict):
+        spec = payload.get("spec")
+        if isinstance(spec, str):
+            return spec
+    raise ApiError("The server returned an unexpected spec response.")
+
+
+def _spec_error(exc: HttpError, *, name: str) -> ElvaError:
+    """Map a rejected spec fetch. The collection already resolved, so a 404 is
+    about the spec, not the collection.
+
+    The backend distinguishes two 404s: no spec has been uploaded (the user's to
+    fix -- exit 2), and the record points at a file missing from storage (the
+    backend's problem -- exit 5). A bad spec must never surface here as exit 4;
+    that is parse_spec's alone.
+    """
+    if exc.status == 401:
+        return AuthError("Your credentials are no longer valid.")
+    if exc.status == 404:
+        if "no spec" in (exc.detail or "").lower():
+            return UsageError(
+                f"collection {name!r} has no spec uploaded",
+                hint="Upload one with 'elva import spec'.",
+            )
+        # "Spec file not found in storage", or any other 404: the record is there
+        # but the file behind it is not. That is a storage fault to retry, not a
+        # usage error the caller can fix.
+        return ApiError(f"the spec for {name!r} could not be retrieved (HTTP 404)")
+    return default_error(exc, action="Fetching the spec")
 
 
 def _list_error(exc: HttpError) -> ElvaError:

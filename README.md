@@ -232,6 +232,52 @@ elva --json collection show "Payments API" | jq '{name, endpoints: .endpoint_cou
 The exit codes match `list`: `2` also covers an ambiguous name and a collection that no
 longer exists.
 
+### Endpoints of a collection
+
+List the operations in a collection's uploaded OpenAPI spec:
+
+```bash
+elva collection endpoints "Payments API"
+```
+
+```
+METHOD  PATH                 OPERATION ID       SUMMARY                 TAGS
+GET     /invoices            listInvoices       List invoices           billing
+POST    /invoices            createInvoice      Create an invoice       billing
+GET     /invoices/{id}       getInvoice         Fetch one invoice       billing
+DELETE  /invoices/{id}       deleteInvoice      Void an invoice         billing
+```
+
+"Endpoints" here means the operations in the spec you uploaded — one row per
+method-and-path. A collection with no spec yet is an error (exit `2`); upload one
+with `elva import spec` first.
+
+Narrow the list with repeatable filters. Each flag is an OR within itself and an
+AND across the three; `--method` is case-insensitive and `--path` matches by prefix:
+
+```bash
+elva collection endpoints "Payments API" --tag billing --method get --path /invoices
+```
+
+`--json` emits the raw array — one object per operation, no wrapper. Each object
+carries `key`, `method`, `path`, `operation_id` (may be `null`), `summary` and
+`tags`. The `key` is `"<METHOD> <path>"` (for example `"GET /invoices/{id}"`),
+which is unambiguous even when a spec omits or repeats `operationId`, and it is
+what to pipe into `elva mcp create --operations`:
+
+```bash
+elva collection endpoints my-api --json | jq -r '.[].key' \
+  | xargs elva mcp create --name my-mcp --operations
+```
+
+> **TODO (ELVA-170):** `elva mcp create` is not merged yet, so the pipeline above
+> is illustrative — the `key` field is already stable and built for it. Update the
+> exact `mcp create` flags once that command lands.
+
+The exit codes match `list`, plus two the spec adds: `2` when the collection has
+no spec uploaded, and `4` when the uploaded spec cannot be parsed. See
+[exit codes](docs/exit-codes.md).
+
 ## Configuration
 
 Settings can come from several places. Highest priority wins:

@@ -8,6 +8,7 @@ from rich.table import Table
 from rich.text import Text
 
 from elva_cli.core.collections import CollectionDetail, CollectionSummaries  # noqa: TC001
+from elva_cli.core.openapi_ops import CollectionOperations  # noqa: TC001
 from elva_cli.ui.renderables.base import aligned_rows, render
 
 
@@ -41,6 +42,36 @@ def _(result: CollectionDetail) -> RenderableType:
     if result.mcps:
         body += [Text(""), _mcp_table(result)]
     return Group(*body)
+
+
+@render.register
+def _(result: CollectionOperations) -> RenderableType:
+    # Empty is a normal outcome (an empty spec, or every operation filtered out);
+    # the command says so on stderr, so stdout stays empty rather than carrying a
+    # message a pipe would have to strip.
+    if not result:
+        return Text("")
+
+    # Every column but SUMMARY is no_wrap with overflow="ignore": a path or an
+    # operationId is an identifier, so it must appear in full, never folded onto
+    # the next line and never cut to a "…". SUMMARY is prose, so it alone wraps --
+    # overflow="fold", not the column default of "ellipsis", so a summary too wide
+    # for its column word-wraps down instead of being clipped with a "…".
+    table = Table(box=None, pad_edge=False, header_style="elva.key")
+    table.add_column("METHOD", no_wrap=True, overflow="ignore")
+    table.add_column("PATH", no_wrap=True, overflow="ignore")
+    table.add_column("OPERATION ID", no_wrap=True, overflow="ignore")
+    table.add_column("SUMMARY", overflow="fold")
+    table.add_column("TAGS", no_wrap=True, overflow="ignore")
+    for op in result:
+        table.add_row(
+            op.method,
+            op.path,
+            op.operation_id or "-",
+            op.summary or "",
+            ", ".join(op.tags) if op.tags else "-",
+        )
+    return table
 
 
 def _detail_rows(result: CollectionDetail) -> list[tuple[str, Text, Text]]:
