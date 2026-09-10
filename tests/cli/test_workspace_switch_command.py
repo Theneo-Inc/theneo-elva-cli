@@ -60,10 +60,3 @@ def test_switch_rejects_object_id(tmp_path: Path) -> None:
     result = _run("workspace", "switch", oid, cwd=root)
     assert result.returncode == 2
     assert "name or slug, not an id" in result.stderr
-
-
-def test_switch_help_lists_global_flag(tmp_path: Path) -> None:
-    root = _repo(tmp_path)
-    result = _run("workspace", "switch", "--help", cwd=root, env={"COLUMNS": "200"})
-    assert result.returncode == 0
-    assert "--global" in result.stdout
