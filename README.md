@@ -159,7 +159,7 @@ count=$(elva --json import spec openapi.yaml | jq '.endpoints // 0')
 
 See [exit codes](docs/exit-codes.md) for the full table.
 
-## Listing collections
+## Inspecting collections
 
 See the collections in a workspace:
 
@@ -194,6 +194,43 @@ case $? in
   5) echo "Elva unreachable"; exit 0 ;;
 esac
 ```
+
+### Showing one collection
+
+Look at a single collection in detail, by name or id:
+
+```bash
+elva collection show "Payments API"
+```
+
+```
+Payments API
+
+id         6aa1322d7ef06cc8f9017460
+spec       yes — Payments Platform API (2.4.1)
+endpoints  17
+labels     public, billing
+source     openapi
+updated    2026-08-30
+
+MCP SERVERS
+NAME          SLUG          STATUS     TOOLS
+Payments MCP  payments-mcp  published     17
+```
+
+A collection with no spec yet is shown as such rather than treated as an error, and one
+with no MCP servers says so on stderr. When a name matches more than one collection, an
+interactive shell offers a picker; run non-interactively (in CI, or with `--json`) it
+stops and lists the candidate ids so you can pass one instead.
+
+`--json` emits the collection as a single object with its MCP servers nested inside:
+
+```bash
+elva --json collection show "Payments API" | jq '{name, endpoints: .endpoint_count, mcps: [.mcps[].name]}'
+```
+
+The exit codes match `list`: `2` also covers an ambiguous name and a collection that no
+longer exists.
 
 ## Configuration
 

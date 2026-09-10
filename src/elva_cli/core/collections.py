@@ -1,25 +1,21 @@
-"""`elva collection list`: the collections in a workspace.
+"""The collections in a workspace: the listing behind `collection list`, one
+collection's detail behind `collection show`, and the resolver both share.
 
-A read-only listing that mirrors what the web app shows. "Workspace" is the
-product's word for what the API calls a companyId; that id is resolved here (via
-the same ELVA-156 resolver every other command uses) and is never handed back
-for printing. `resolve_collection` turns the name or id a person typed into one
-summary and is deliberately written to be reused by `show` and `endpoints` when
-they land -- it never prompts, so an ambiguous match is raised, not resolved.
+A read-only view that mirrors what the web app shows. "Workspace" is the
+product's word for what the API calls a companyId; the command layer resolves
+that id (via the shared ELVA-156 resolver) and passes it down here, so nothing
+in this module touches settings or prompts. `resolve_collection` turns the name
+or id a person typed into one summary and never prompts -- an ambiguous match is
+raised carrying its candidates, so a caller can disambiguate however it likes.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from elva_cli.auth import get_access_token
 from elva_cli.core.api.http import HttpError, default_error, get_json
-from elva_cli.core.api.targets import resolve_workspace
 from elva_cli.errors import ApiError, AuthError, ElvaError, UsageError
-
-if TYPE_CHECKING:
-    from elva_cli.context import Ctx
 
 
 @dataclass(frozen=True)
@@ -47,11 +43,46 @@ class CollectionSummaries(tuple[CollectionSummary, ...]):
     __slots__ = ()
 
 
+@dataclass(frozen=True)
+class McpSummary:
+    """One MCP server published from a collection."""
+
+    deployment_id: str
+    slug: str
+    name: str
+    status: str
+    tool_count: int | None
+
+
+@dataclass(frozen=True)
+class CollectionDetail:
+    """One collection in full, as `collection show` presents it.
+
+    The presentation type and the --json shape at once: the output layer
+    dispatches a detail view on it, and `mcps` nests naturally inside the
+    serialised object. No companyId, for the same reason a summary carries none.
+    """
+
+    id: str
+    name: str
+    description: str | None
+    spec_uploaded: bool
+    spec_title: str | None
+    spec_version: str | None
+    labels: tuple[str, ...]
+    source: str | None
+    is_demo: bool
+    endpoint_count: int
+    created_at: str | None
+    updated_at: str | None
+    mcps: tuple[McpSummary, ...]
+
+
 class AmbiguousCollection(UsageError):  # noqa: N818  named for the domain, not the -Error suffix
     """More than one collection matches the name given.
 
-    Carries the candidates so a command can offer a picker later; core never
-    prompts, so it stops here with them attached rather than choosing one.
+    Carries the candidates so a command can offer a picker; core never prompts,
+    so it stops here with them attached rather than choosing one.
     """
 
     code = "ELVA_AMBIGUOUS_COLLECTION"
@@ -66,12 +97,8 @@ class AmbiguousCollection(UsageError):  # noqa: N818  named for the domain, not 
         )
 
 
-def list_collections(ctx: Ctx) -> list[CollectionSummary]:
-    """Every collection in the resolved workspace, sorted by name for stable output."""
-    base_url = ctx.settings.base_url
-    token = get_access_token(base_url=base_url)
-    company_id = _workspace_id(ctx, base_url=base_url, token=token)
-
+def list_collections(base_url: str, token: str, company_id: str) -> list[CollectionSummary]:
+    """Every collection in the workspace, sorted by name for stable output."""
     try:
         payload = get_json(f"{base_url}/api/companies/{company_id}/collections", token=token)
     except HttpError as exc:
@@ -81,14 +108,14 @@ def list_collections(ctx: Ctx) -> list[CollectionSummary]:
     return sorted(summaries, key=lambda summary: (summary.name.lower(), summary.id))
 
 
-def resolve_collection(ctx: Ctx, ref: str) -> CollectionSummary:
+def resolve_collection(base_url: str, token: str, company_id: str, ref: str) -> CollectionSummary:
     """The one collection a person means by `ref`: an exact id, else an exact name.
 
     Zero matches is a usage error naming `ref`; more than one is
     `AmbiguousCollection` carrying the candidates, so a caller can disambiguate
-    however it likes. Built for reuse by `show` and `endpoints`.
+    however it likes.
     """
-    summaries = list_collections(ctx)
+    summaries = list_collections(base_url, token, company_id)
 
     for summary in summaries:
         if summary.id == ref:
@@ -105,26 +132,38 @@ def resolve_collection(ctx: Ctx, ref: str) -> CollectionSummary:
     raise AmbiguousCollection(by_name)
 
 
-def _workspace_id(ctx: Ctx, *, base_url: str, token: str) -> str:
-    """The companyId to list, via the shared workspace resolver.
+def get_collection(base_url: str, token: str, company_id: str, ref: str) -> CollectionDetail:
+    """One collection in full, resolving `ref` (name or id) to its ObjectId first.
 
-    resolve_workspace (ELVA-156) is shared with the other commands, so its
-    messages are left as they are -- except that a workspace-selection failure
-    reached from here should also point at ELVA_WORKSPACE, the env form of the
-    flag its hint already names.
+    The route is keyed by ObjectId, so the reference always goes through
+    `resolve_collection`; the resolved id is what the detail call uses. A 404 at
+    that point means the collection was there when we listed and is gone now --
+    a usage error, not a server fault.
     """
+    summary = resolve_collection(base_url, token, company_id, ref)
+    url = f"{base_url}/api/companies/{company_id}/collections/{summary.id}"
     try:
-        target = resolve_workspace(base_url=base_url, token=token, workspace=ctx.settings.workspace)
-    except UsageError as exc:
-        raise _also_name_the_env(exc) from exc
-    return target.id
+        payload = get_json(url, token=token)
+    except HttpError as exc:
+        raise _detail_error(exc, name=summary.name) from exc
 
-
-def _also_name_the_env(exc: UsageError) -> UsageError:
-    hint = exc.hint
-    if hint and "--workspace" in hint and "ELVA_WORKSPACE" not in hint:
-        hint = f"{hint} You can also set ELVA_WORKSPACE."
-    return UsageError(str(exc), hint=hint)
+    doc = _document(payload)
+    return CollectionDetail(
+        id=_row_id(doc) or summary.id,
+        name=_text(doc.get("name")) or summary.name,
+        description=_text(doc.get("description")),
+        # No hasSpec field yet (tracked separately); a specTitle is the proxy.
+        spec_uploaded=bool(_text(doc.get("specTitle"))),
+        spec_title=_text(doc.get("specTitle")),
+        spec_version=_text(doc.get("specVersion")),
+        labels=_labels(doc.get("labels")),
+        source=_text(doc.get("source")),
+        is_demo=bool(doc.get("isDemo")),
+        endpoint_count=_endpoint_count(doc),
+        created_at=_timestamp(doc, "createdAt", "_createdAt"),
+        updated_at=_timestamp(doc, "updatedAt", "_updatedAt"),
+        mcps=_mcps(payload),
+    )
 
 
 def _list_error(exc: HttpError) -> ElvaError:
@@ -137,6 +176,50 @@ def _list_error(exc: HttpError) -> ElvaError:
             hint="Check --workspace or ELVA_WORKSPACE.",
         )
     return default_error(exc, action="Listing collections")
+
+
+def _detail_error(exc: HttpError, *, name: str) -> ElvaError:
+    """Map a rejected detail call. The workspace already resolved, so a 403/404
+    here is about this collection, not the workspace -- and a usage error, not a
+    server fault worth retrying."""
+    if exc.status == 401:
+        return AuthError("Your credentials are no longer valid.")
+    if exc.status in (403, 404):
+        return UsageError(
+            f"collection {name!r} not found",
+            hint="It may have been deleted; run 'elva collection list'.",
+        )
+    return default_error(exc, action="Fetching the collection")
+
+
+def _document(payload: Any) -> dict[str, Any]:
+    """The collection out of a {"collection": {...}} envelope."""
+    if not isinstance(payload, dict):
+        raise ApiError("The server returned an unexpected collection response.")
+    doc = payload.get("collection")
+    if not isinstance(doc, dict):
+        raise ApiError("The server returned an unexpected collection response.")
+    return doc
+
+
+def _mcps(payload: Any) -> tuple[McpSummary, ...]:
+    """The MCP servers the detail route returns alongside the document."""
+    if not isinstance(payload, dict):
+        return ()
+    rows = payload.get("mcps")
+    if not isinstance(rows, list):
+        return ()
+    return tuple(
+        McpSummary(
+            deployment_id=_text(row.get("deploymentId")) or "",
+            slug=_text(row.get("mcpSlug")) or "",
+            name=_text(row.get("mcpName")) or _text(row.get("mcpSlug")) or "(unnamed)",
+            status=_text(row.get("status")) or "unknown",
+            tool_count=_int(row.get("toolCount")),
+        )
+        for row in rows
+        if isinstance(row, dict)
+    )
 
 
 def _rows(payload: Any) -> list[dict[str, Any]]:
@@ -159,6 +242,22 @@ def _summary(row: dict[str, Any]) -> CollectionSummary:
         is_demo=bool(row.get("isDemo")),
         updated_at=_text(row.get("updatedAt")),
     )
+
+
+def _endpoint_count(doc: dict[str, Any]) -> int:
+    """The detail route sends the endpoints array; its length is the count."""
+    endpoints = doc.get("endpoints")
+    return len(endpoints) if isinstance(endpoints, list) else 0
+
+
+def _timestamp(doc: dict[str, Any], *keys: str) -> str | None:
+    """The first of `keys` the document actually carries; the API is not
+    consistent about the leading underscore."""
+    for key in keys:
+        value = _text(doc.get(key))
+        if value is not None:
+            return value
+    return None
 
 
 def _row_id(row: dict[str, Any]) -> str | None:

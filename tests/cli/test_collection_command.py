@@ -24,6 +24,25 @@ def test_the_command_group_is_registered(run: Run) -> None:
     result = run("collection")
     assert result.returncode == ExitCode.USAGE
     assert "list" in result.stdout
+    assert "show" in result.stdout
+
+
+def test_show_needs_a_collection_argument(run: Run) -> None:
+    result = run("collection", "show")
+    assert result.returncode == ExitCode.USAGE
+
+
+def test_show_not_logged_in_is_auth(run: Run) -> None:
+    result = run("collection", "show", "payments-api")
+    assert result.returncode == ExitCode.AUTH
+    assert "not logged in" in result.stderr
+
+
+def test_show_json_mode_keeps_stdout_clean_on_failure(run: Run) -> None:
+    result = run("--json", "collection", "show", "payments-api")
+    assert result.returncode == ExitCode.AUTH
+    assert result.stdout == ""
+    assert "ELVA_AUTH" in result.stderr
 
 
 def test_it_shows_up_in_top_level_help(run: Run) -> None:
