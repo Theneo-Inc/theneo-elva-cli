@@ -42,6 +42,12 @@ class HttpError(Exception):
         self.detail = detail
 
 
+class UnreachableError(ApiError):
+    """The server could not be reached at all
+    DNS, connection refused, timeout, or a reset mid-response
+    """
+
+
 def default_error(error: HttpError, *, action: str) -> ElvaError:
     """The mapping every caller shares. `action` completes "... failed"."""
     if error.status in (401, 403):
@@ -246,7 +252,7 @@ def _attempt(
         # and a different thing to tell the user. A read timeout arrives as a
         # bare TimeoutError, a connect timeout as URLError wrapping one; a DNS
         # failure or a refused connection is neither.
-        raise ApiError(TIMED_OUT if _timed_out(exc) else UNREACHABLE) from exc
+        raise UnreachableError(TIMED_OUT if _timed_out(exc) else UNREACHABLE) from exc
 
     if not raw:
         return None

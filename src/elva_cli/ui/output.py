@@ -45,6 +45,16 @@ class Output:
             return
         self._out.print(render(result), soft_wrap=True)
 
+    def stream_json(self, obj: Any) -> None:
+        """One NDJSON line, flushed immediately."""
+        self._out.file.write(json.dumps(obj, default=str) + "\n")
+        self._out.file.flush()
+
+    def stream_line(self, text: str) -> None:
+        """One already-formatted plain line, flushed immediately."""
+        self._out.file.write(text + "\n")
+        self._out.file.flush()
+
     def hint(self, message: str) -> None:
         self._err.print(message, style="elva.dim")
 
