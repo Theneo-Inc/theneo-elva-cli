@@ -21,6 +21,20 @@ def login(click_ctx: typer.Context) -> None:
     ctx.out.result(result)
 
 
+@app.command("register")
+def register(click_ctx: typer.Context) -> None:
+    """Create an account via your browser."""
+    from elva_cli.core.services.auth import register as register_service
+
+    ctx = get_ctx(click_ctx)
+    result = register_service(
+        base_url=ctx.settings.base_url,
+        on_progress=ctx.out.hint,
+        interactive=ctx.interactive,
+    )
+    ctx.out.result(result)
+
+
 @app.command("logout")
 def logout(click_ctx: typer.Context) -> None:
     """Sign out and forget your stored credentials."""
