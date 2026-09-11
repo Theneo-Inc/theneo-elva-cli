@@ -27,6 +27,7 @@ class Lazy:
 class LazyGroup(TyperGroup):
     commands_: ClassVar[dict[str, Lazy]] = {
         "auth": Lazy("elva_cli.commands.auth", "Sign in and manage credentials."),
+        "collection": Lazy("elva_cli.commands.collection", "Inspect collections in a workspace."),
         "config": Lazy("elva_cli.commands.config", "Inspect resolved configuration."),
         "import": Lazy("elva_cli.commands.import_", "Import an API spec into a collection."),
         "whoami": Lazy("elva_cli.commands.whoami", "Show who you're signed in as."),

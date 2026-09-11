@@ -53,7 +53,28 @@ ELVA_AUTH: session expired
 - Where one exists, the next action to take.
 
 Codes currently defined: `ELVA_ERROR`, `ELVA_USAGE`, `ELVA_CONFIG`, `ELVA_AUTH`,
-`ELVA_VALIDATION`, `ELVA_API`, `ELVA_CRASH`.
+`ELVA_VALIDATION`, `ELVA_API`, `ELVA_CRASH`, `ELVA_AMBIGUOUS_COLLECTION`.
+
+`ELVA_AMBIGUOUS_COLLECTION` is a specialisation of `ELVA_USAGE` (exit `2`): a
+collection name matched more than one collection, so the reference was not enough
+to act on. Pass the id instead.
+
+## Cases worth calling out
+
+`elva collection endpoints` reads a collection's uploaded spec, and the two
+outcomes it adds are the reason exit `2` and exit `4` are kept apart:
+
+- **No spec uploaded** → exit `2` (`ELVA_USAGE`). The collection exists but has no
+  spec, so there is nothing to list. Fix it by uploading one with
+  `elva import spec`; retrying unchanged gives the same result.
+- **Spec cannot be parsed** → exit `4` (`ELVA_VALIDATION`). A spec is stored but is
+  not JSON or YAML, or is not an OpenAPI document (no `paths`). The CLI worked
+  correctly; the spec is wrong.
+
+These never cross with exit `5`. A spec the backend cannot fetch from storage, an
+unreachable server, or any other transport failure is exit `5` (`ELVA_API`) — never
+`4`. And a malformed spec is always `4` — never `5`. So a pipeline can trust that
+`4` means *fix the spec* and `5` means *retry later*.
 
 ## Crash files
 
