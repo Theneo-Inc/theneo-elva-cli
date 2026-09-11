@@ -106,7 +106,7 @@ def responder(monkeypatch: pytest.MonkeyPatch, payload: Any) -> list[str]:
     """Replace the collections GET with a single fixed answer, recording URLs."""
     seen: list[str] = []
 
-    def fake_get(url: str, *, token: str, timeout: float = 30.0) -> Any:
+    def fake_get(url: str, *, token: str, timeout: float = 30.0, reauth: Any = None) -> Any:
         seen.append(url)
         if isinstance(payload, Exception):
             raise payload
@@ -120,7 +120,7 @@ def routes(monkeypatch: pytest.MonkeyPatch, table: dict[str, Any]) -> list[str]:
     """Replace the collections GET with a per-URL answer, recording URLs."""
     seen: list[str] = []
 
-    def fake_get(url: str, *, token: str, timeout: float = 30.0) -> Any:
+    def fake_get(url: str, *, token: str, timeout: float = 30.0, reauth: Any = None) -> Any:
         seen.append(url)
         answer = table[url]
         if isinstance(answer, Exception):

@@ -122,7 +122,9 @@ class TestAmbiguousName:
     ) -> None:
         seen: list[str] = []
 
-        def fake_get(base_url: str, token: str, company_id: str, ref: str) -> CollectionDetail:
+        def fake_get(
+            base_url: str, token: str, company_id: str, ref: str, reauth: Any = None
+        ) -> CollectionDetail:
             seen.append(ref)
             if ref == "api":
                 raise AmbiguousCollection([candidate(ID_A), candidate(ID_B)])

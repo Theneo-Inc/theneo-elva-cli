@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-# Imported at runtime, not under TYPE_CHECKING: singledispatch resolves this
-# function's annotations when register() runs, so every name in them -- the
-# dispatch type and the return type alike -- has to actually exist.
+# Runtime import, not TYPE_CHECKING: singledispatch resolves the annotations
+# when register() runs, so the names have to exist.
 from rich.console import Group, RenderableType
 from rich.table import Table
 from rich.text import Text
@@ -46,17 +45,9 @@ def _(result: CollectionDetail) -> RenderableType:
 
 @render.register
 def _(result: CollectionOperations) -> RenderableType:
-    # Empty is a normal outcome (an empty spec, or every operation filtered out);
-    # the command says so on stderr, so stdout stays empty rather than carrying a
-    # message a pipe would have to strip.
     if not result:
         return Text("")
 
-    # Every column but SUMMARY is no_wrap with overflow="ignore": a path or an
-    # operationId is an identifier, so it must appear in full, never folded onto
-    # the next line and never cut to a "…". SUMMARY is prose, so it alone wraps --
-    # overflow="fold", not the column default of "ellipsis", so a summary too wide
-    # for its column word-wraps down instead of being clipped with a "…".
     table = Table(box=None, pad_edge=False, header_style="elva.key")
     table.add_column("METHOD", no_wrap=True, overflow="ignore")
     table.add_column("PATH", no_wrap=True, overflow="ignore")
@@ -89,10 +80,7 @@ def _detail_rows(result: CollectionDetail) -> list[tuple[str, Text, Text]]:
 
 
 def _spec(result: CollectionDetail) -> Text:
-    """Whether a spec is uploaded, and its title and version when there is one.
-
-    A collection with no spec is shown as such -- it is a normal state, not a
-    fault."""
+    """Whether a spec is uploaded, and its title and version when there is one."""
     if not result.spec_uploaded:
         return Text("no")
     detail = result.spec_title or "(untitled)"

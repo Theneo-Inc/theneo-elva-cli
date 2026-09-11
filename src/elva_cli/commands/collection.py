@@ -25,12 +25,7 @@ def main() -> None:
 
 @app.command("list")
 def list_(click_ctx: typer.Context) -> None:
-    """List the collections in the current workspace.
-
-    Reads --workspace / ELVA_WORKSPACE; an account with a single workspace needs
-    neither. Columns: ID, NAME, SPEC, ENDPOINTS, UPDATED. --json emits the raw
-    array of collections instead.
-    """
+    """List the collections in the current workspace."""
     from elva_cli.core.collections import CollectionSummaries, list_collections
 
     ctx = get_ctx(click_ctx)
@@ -46,13 +41,7 @@ def show(
         ..., metavar="COLLECTION", help="The collection to show, by name or id."
     ),
 ) -> None:
-    """Show one collection in detail, by name or id.
-
-    Reads --workspace / ELVA_WORKSPACE like `list`. When a name matches more than
-    one collection, an interactive shell offers a picker; otherwise it stops and
-    lists the candidates so you can pass an id. --json emits the collection with
-    its MCP servers nested inside.
-    """
+    """Show one collection, by name or id."""
     from elva_cli.core.collections import AmbiguousCollection, get_collection
 
     ctx = get_ctx(click_ctx)
@@ -87,17 +76,7 @@ def endpoints(
         [], "--path", metavar="PREFIX", help="Keep only paths starting with this. Repeatable."
     ),
 ) -> None:
-    """List the operations in a collection's uploaded OpenAPI spec.
-
-    Reads --workspace / ELVA_WORKSPACE like `list`. Columns: METHOD, PATH,
-    OPERATION ID, SUMMARY, TAGS. Each `--tag`, `--method` and `--path` is an OR
-    within itself and an AND across the three; --method is case-insensitive and
-    --path matches by prefix.
-
-    --json emits the raw array of operations. Each carries a `key` of
-    "<METHOD> <path>" -- the selector `elva mcp create --operations` accepts,
-    unambiguous even when a spec omits or repeats operationId.
-    """
+    """List the operations in a collection's uploaded OpenAPI spec."""
     from elva_cli.core.collections import (
         AmbiguousCollection,
         get_collection_operations,
@@ -108,9 +87,8 @@ def endpoints(
     ctx = get_ctx(click_ctx)
     base_url, token, company_id = _workspace(ctx)
 
-    # Resolve here, not just inside get_collection_operations, so the summary's
-    # endpoint_count is in hand for the sanity check below and so the picker can
-    # run in the command layer exactly as `show` does.
+    # Resolved here too so the picker stays in the command layer and the count
+    # below has something to compare against.
     try:
         summary = resolve_collection(base_url, token, company_id, collection)
     except AmbiguousCollection as exc:
@@ -121,9 +99,8 @@ def endpoints(
 
     operations = get_collection_operations(base_url, token, company_id, summary.id)
 
-    # The workspace listing keeps its own endpoint count; if it disagrees with
-    # what the spec actually holds, the two have drifted. Say so, but do not fail
-    # -- the spec we just parsed is the authority for what follows.
+    # The listing keeps its own count. If it disagrees with the spec, say so but
+    # carry on: the spec is what everything downstream uses.
     if summary.endpoint_count is not None and summary.endpoint_count != len(operations):
         ctx.out.warn(
             f"the workspace lists {summary.endpoint_count} endpoints "
@@ -145,14 +122,7 @@ def endpoints(
 
 
 def _workspace(ctx: Ctx) -> tuple[str, str, str]:
-    """(base_url, token, company_id) for the resolved workspace.
-
-    Resolution lives here, in the command layer, so the services below take
-    plain values. resolve_workspace (ELVA-156) is shared with the other
-    commands; its messages are left as they are, except that a
-    workspace-selection failure reached from here should also point at
-    ELVA_WORKSPACE, the env form of the flag its hint already names.
-    """
+    """(base_url, token, company_id) for the resolved workspace."""
     from elva_cli.auth import get_access_token
     from elva_cli.core.api.targets import resolve_workspace
     from elva_cli.errors import UsageError
@@ -176,12 +146,7 @@ def _also_name_the_env(exc: UsageError) -> UsageError:
 
 
 def _pick(candidates: tuple[CollectionSummary, ...], ctx: Ctx) -> str:
-    """Let the user choose among same-named collections; returns the chosen id.
-
-    Only reached on an interactive shell (`show` re-raises otherwise), so the
-    reused prompt helper never has to refuse. Candidates are labelled by id and
-    updated date, the two things that tell them apart when the name cannot.
-    """
+    """Ask which of the same-named collections was meant. Returns its id."""
     from elva_cli.ui import prompts
 
     labels = {_label(candidate): candidate for candidate in candidates}
