@@ -251,6 +251,125 @@ Naming one is required wherever there is nobody to ask -- in CI, under `--json`,
 output redirected. `elva import postman` with nothing named exits `2` there, listing what
 was available, rather than guessing which of your collections you meant.
 
+## Inspecting collections
+
+See the collections in a workspace:
+
+```bash
+elva collection list
+```
+
+```
+ID                        NAME            SPEC  ENDPOINTS  UPDATED
+6aa1322d7ef06cc8f9017460  Payments API    yes          17  2026-08-30
+7bb2433e8f17ad91a0285713  Internal Tools  no            -  2026-09-02
+```
+
+`SPEC` says whether a spec has been uploaded yet, and `ENDPOINTS` is `-` until one has.
+Which workspace is listed comes from `--workspace` or `ELVA_WORKSPACE`; an account with a
+single workspace needs neither. Both are global flags, so they go before the subcommand.
+
+`--json` emits the raw array — one object per collection, no wrapper — for piping into `jq`:
+
+```bash
+elva --json collection list | jq -r '.[].name'
+```
+
+The exit code is the whole interface:
+
+```bash
+elva collection list
+case $? in
+  0) echo "listed" ;;
+  2) echo "no such workspace, or more than one and none chosen"; exit 1 ;;
+  3) echo "not signed in"; exit 1 ;;
+  5) echo "Elva unreachable"; exit 0 ;;
+esac
+```
+
+### Showing one collection
+
+Look at a single collection in detail, by name or id:
+
+```bash
+elva collection show "Payments API"
+```
+
+```
+Payments API
+
+id         6aa1322d7ef06cc8f9017460
+spec       yes — Payments Platform API (2.4.1)
+endpoints  17
+labels     public, billing
+source     openapi
+updated    2026-08-30
+
+MCP SERVERS
+NAME          SLUG          STATUS     TOOLS
+Payments MCP  payments-mcp  published     17
+```
+
+A collection with no spec yet is shown as such rather than treated as an error, and one
+with no MCP servers says so on stderr. When a name matches more than one collection, an
+interactive shell offers a picker; run non-interactively (in CI, or with `--json`) it
+stops and lists the candidate ids so you can pass one instead.
+
+`--json` emits the collection as a single object with its MCP servers nested inside:
+
+```bash
+elva --json collection show "Payments API" | jq '{name, endpoints: .endpoint_count, mcps: [.mcps[].name]}'
+```
+
+The exit codes match `list`: `2` also covers an ambiguous name and a collection that no
+longer exists.
+
+### Endpoints of a collection
+
+List the operations in a collection's uploaded OpenAPI spec:
+
+```bash
+elva collection endpoints "Payments API"
+```
+
+```
+METHOD  PATH                 OPERATION ID       SUMMARY                 TAGS
+GET     /invoices            listInvoices       List invoices           billing
+POST    /invoices            createInvoice      Create an invoice       billing
+GET     /invoices/{id}       getInvoice         Fetch one invoice       billing
+DELETE  /invoices/{id}       deleteInvoice      Void an invoice         billing
+```
+
+"Endpoints" here means the operations in the spec you uploaded — one row per
+method-and-path. A collection with no spec yet is an error (exit `2`); upload one
+with `elva import spec` first.
+
+Narrow the list with repeatable filters. Each flag is an OR within itself and an
+AND across the three; `--method` is case-insensitive and `--path` matches by prefix:
+
+```bash
+elva collection endpoints "Payments API" --tag billing --method get --path /invoices
+```
+
+`--json` emits the raw array — one object per operation, no wrapper. Each object
+carries `key`, `method`, `path`, `operation_id` (may be `null`), `summary` and
+`tags`. The `key` is `"<METHOD> <path>"` (for example `"GET /invoices/{id}"`),
+which is unambiguous even when a spec omits or repeats `operationId`, and it is
+what to pipe into `elva mcp create --operations`:
+
+```bash
+elva collection endpoints my-api --json | jq -r '.[].key' \
+  | xargs elva mcp create --name my-mcp --operations
+```
+
+> **TODO (ELVA-170):** `elva mcp create` is not merged yet, so the pipeline above
+> is illustrative — the `key` field is already stable and built for it. Update the
+> exact `mcp create` flags once that command lands.
+
+The exit codes match `list`, plus two the spec adds: `2` when the collection has
+no spec uploaded, and `4` when the uploaded spec cannot be parsed. See
+[exit codes](docs/exit-codes.md).
+
 ## Configuration
 
 Settings can come from several places. Highest priority wins:

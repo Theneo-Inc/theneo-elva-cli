@@ -21,6 +21,9 @@ if TYPE_CHECKING:
 
 
 def as_data(result: object) -> Any:
+    # A list command emits a bare array; recurse so each element is a dataclass.
+    if isinstance(result, (list, tuple)):
+        return [as_data(item) for item in result]
     if dataclasses.is_dataclass(result) and not isinstance(result, type):
         return dataclasses.asdict(result)
     msg = f"Results must be dataclasses, got {type(result).__name__}"

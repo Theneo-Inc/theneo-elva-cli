@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from elva_cli.core import collections
 from elva_cli.core.api import targets
 from elva_cli.core.api.http import HttpError
 from elva_cli.errors import ApiError, AuthError, UsageError
@@ -23,6 +24,7 @@ def responder(monkeypatch: pytest.MonkeyPatch, payload: Any) -> list[str]:
         return payload
 
     monkeypatch.setattr(targets, "get_json", fake_get)
+    monkeypatch.setattr(collections, "get_json", fake_get)
     return seen
 
 
@@ -89,13 +91,19 @@ class TestResolveWorkspace:
 
 
 class TestResolveCollection:
-    def test_an_id_skips_the_lookup_entirely(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        seen = responder(monkeypatch, {"collections": []})
+    def test_an_id_is_checked_against_the_listing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        seen = responder(monkeypatch, {"collections": [{"id": OID, "name": "payments"}]})
         target = targets.resolve_collection(
             base_url=BASE_URL, token="t", company_id=OID, collection=OID
         )
         assert target.id == OID
-        assert seen == []
+        assert target.name == "payments"
+        assert seen == [f"{BASE_URL}/api/companies/{OID}/collections"]
+
+    def test_an_unknown_id_is_a_usage_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        responder(monkeypatch, {"collections": [{"id": "c" * 24, "name": "payments"}]})
+        with pytest.raises(UsageError):
+            targets.resolve_collection(base_url=BASE_URL, token="t", company_id=OID, collection=OID)
 
     def test_matched_by_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
         seen = responder(

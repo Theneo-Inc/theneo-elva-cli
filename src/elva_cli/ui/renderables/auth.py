@@ -2,13 +2,23 @@ from __future__ import annotations
 
 from rich.text import Text
 
-from elva_cli.core.services.auth_result import LoginResult, LogoutResult, LogoutStatus
+from elva_cli.core.services.auth_result import (
+    LoginResult,
+    LogoutResult,
+    LogoutStatus,
+    RegisterResult,
+)
 from elva_cli.ui.renderables.base import render
 
 
 @render.register
 def _(result: LoginResult) -> Text:
     return Text(f"Signed in as {result.email}.", style="elva.ok")
+
+
+@render.register
+def _(result: RegisterResult) -> Text:
+    return Text(f"Account created. Signed in as {result.email}.", style="elva.ok")
 
 
 @render.register

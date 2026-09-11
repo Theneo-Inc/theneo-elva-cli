@@ -18,7 +18,7 @@ from elva_cli.errors import ApiError, UsageError
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-_OBJECT_ID = re.compile(r"^[0-9a-fA-F]{24}$")
+_OBJECT_ID = re.compile(r"^[0-9a-f]{24}$")
 
 
 @dataclass(frozen=True)
@@ -40,8 +40,9 @@ def resolve_workspace(
     unambiguous case should not need a flag. More than one is a question the
     CLI cannot answer for the user, so it lists them and stops.
     """
-    if workspace and _OBJECT_ID.match(workspace):
-        return Target(id=workspace, name=workspace)
+    if workspace and _OBJECT_ID.match(workspace.lower()):
+        normalized = workspace.lower()
+        return Target(id=normalized, name=normalized)
 
     try:
         payload = get_json(f"{base_url}/api/companies/workspaces", token=token, reauth=reauth)
@@ -90,30 +91,24 @@ def resolve_collection(
     collection: str,
     reauth: Callable[[str], str] | None = None,
 ) -> Target:
-    """The collection to act on, by name or by id."""
-    if _OBJECT_ID.match(collection):
-        return Target(id=collection, name=collection)
+    """The collection to act on, by name or by id.
+
+    One resolver for the whole CLI: core.collections owns the matching so that
+    `--collection` behaves the same here as it does in the collection commands.
+    Callers here have no picker, so an ambiguous name becomes a usage error.
+    """
+    from elva_cli.core.collections import AmbiguousCollection
+    from elva_cli.core.collections import resolve_collection as resolve
 
     try:
-        payload = get_json(
-            f"{base_url}/api/companies/{company_id}/collections", token=token, reauth=reauth
-        )
-    except HttpError as exc:
-        if exc.status == 404:
-            raise UsageError(
-                "that workspace does not exist, or you cannot see it",
-                hint="Check --workspace.",
-            ) from exc
-        raise default_error(exc, action="Listing collections") from exc
-
-    found = [
-        Target(id=str(row["id"]), name=str(row.get("name") or row["id"]))
-        for row in _rows(payload, "collections")
-        if row.get("id")
-    ]
-    wanted = collection.strip().lower()
-    matches = [target for target in found if target.name.lower() == wanted]
-    return _exactly_one(matches, kind="collection", wanted=collection, available=found)
+        summary = resolve(base_url, token, company_id, collection, reauth)
+    except AmbiguousCollection as exc:
+        candidates = [Target(id=c.id, name=c.name) for c in exc.candidates]
+        raise UsageError(
+            f"{len(candidates)} collections are named {collection!r}",
+            hint=f"Pass the id instead: {', '.join(t.id for t in candidates)}",
+        ) from exc
+    return Target(id=summary.id, name=summary.name)
 
 
 def _rows(payload: Any, key: str) -> list[dict[str, Any]]:

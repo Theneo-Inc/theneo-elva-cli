@@ -18,6 +18,11 @@ class LoginResult:
     email: str
 
 
+@dataclass(frozen=True)
+class RegisterResult:
+    email: str
+
+
 class LogoutStatus(enum.StrEnum):
     """Why `elva auth logout` ended the way it did.
 
