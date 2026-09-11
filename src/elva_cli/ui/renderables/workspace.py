@@ -4,6 +4,7 @@ from rich.console import Group
 from rich.text import Text
 
 from elva_cli.core.services.workspace_list_result import WorkspaceListResult  # noqa: TC001
+from elva_cli.core.services.workspace_switch_result import WorkspaceSwitchResult  # noqa: TC001
 from elva_cli.ui.renderables.base import aligned_rows, render
 
 
@@ -48,3 +49,12 @@ def _(result: WorkspaceListResult) -> Group | Text:
 
     table = aligned_rows(entries)
     return Group(warning, table) if warning else Group(table)
+
+
+@render.register
+def _(result: WorkspaceSwitchResult) -> Text:
+    return Text(
+        f"switched to {result.active_name} ({result.active_slug}), "
+        f"wrote workspace to {result.path}",
+        style="elva.ok",
+    )
