@@ -74,22 +74,24 @@ elva import spec openapi.yaml --name "Payments v2"
 
 ### Where the spec comes from
 
-A path, a URL Elva fetches itself, or stdin:
+A path, a URL, or stdin:
 
 ```bash
 elva import spec openapi.yaml
 ```
 
 ```bash
-elva import spec --url https://example.com/openapi.yaml --name Payments
+elva import spec --url https://example.com/openapi.yaml
 ```
 
 ```bash
 curl -s https://example.com/openapi.yaml | elva import spec - --name Payments
 ```
 
-A URL is fetched server-side, so nothing is read locally -- which is why `--name` cannot
-be defaulted from it. Files must be `.json`, `.yaml` or `.yml`, and 10 MB or smaller.
+A `--url` is fetched through Elva -- the same proxy the web app uses, so a spec host only
+Elva can reach still works -- and then imported like a file, so `--name` defaults from its
+`info.title` too. A JSON spec is stored as YAML whichever way it came in, matching the web
+app. Files must be `.json`, `.yaml` or `.yml`, and 10 MB or smaller.
 
 ### Updating an existing collection
 
@@ -127,10 +129,10 @@ Nothing was sent. Drop --dry-run to do it.
 
 ### Postman
 
-Postman collections are not supported here. Elva reads operations out of an uploaded file
-as OpenAPI, so a Postman collection would import successfully and produce an empty
-collection -- `elva` refuses it rather than let that happen. Export to OpenAPI first, or
-use the Postman integration in the web app.
+A Postman collection in a *file* is refused here. Elva reads an uploaded file as OpenAPI,
+so a collection would import successfully and produce an empty result -- `elva` stops it
+rather than let that happen. Postman collections come from Postman itself instead, with
+[`elva import postman`](#importing-from-postman).
 
 ### In CI
 
@@ -158,6 +160,96 @@ count=$(elva --json import spec openapi.yaml | jq '.endpoints // 0')
 ```
 
 See [exit codes](docs/exit-codes.md) for the full table.
+
+## Importing from Postman
+
+`elva import postman` reads a collection out of your Postman account and creates an Elva
+collection from it:
+
+```bash
+elva import postman "Payments Platform API"
+```
+
+```
+Created 'Payments Platform API' from Postman.
+
+workspace      Theneo
+endpoints      17
+postman id     12345678-1111-2222-3333-444455556666
+collection id  6aa1322d7ef06cc8f9017460
+url            https://app.getelva.ai/collections?selected=6aa1322d7ef06cc8f9017460
+```
+
+A collection can be named by name or by id. An id is taken at its word and imported
+directly; a name has to be looked up first. With nothing named, a terminal gets a list to
+pick from:
+
+```bash
+elva import postman
+```
+
+### The Postman API key
+
+This needs a [Postman API key](https://postman.co/settings/me/api-keys) to read your
+collections with. **There is no flag that takes one**, deliberately: argv is readable by
+every other process on the machine and a shell writes it to history, so a key passed that
+way outlives the command that used it. It comes from one of three places instead:
+
+```bash
+export ELVA_POSTMAN_API_KEY=PMAK-...              # the environment
+```
+
+```bash
+elva import postman                               # a hidden prompt, if that is unset
+```
+
+```bash
+pass show postman/key | elva import postman --key-stdin    # or the first line of stdin
+```
+
+The key is used for the two requests it takes and then dropped. It is never stored, never
+logged, taken back out of any message the server echoes it into, and never sent anywhere
+but over `https`.
+
+A rejected or expired key exits `3` -- a credential problem, not a bad invocation:
+
+```bash
+elva import postman Payments
+case $? in
+  0) echo "imported" ;;
+  2) echo "no key given, or no such collection"; exit 1 ;;
+  3) echo "the Postman key was rejected"; exit 1 ;;
+  5) echo "Elva or Postman unreachable"; exit 0 ;;
+esac
+```
+
+### Listing what is there
+
+`--list` shows the collections the key can see and imports nothing:
+
+```
+$ elva import postman --list
+3 Postman collections.
+
+Payments Platform API  12345678-1111-2222-3333-444455556666  2026-08-14
+Billing                12345678-aaaa-bbbb-cccc-ddddeeeeffff  2026-07-02
+Internal Webhooks      12345678-9999-8888-7777-666655554444
+
+Import one with: elva import postman <name or id>
+```
+
+With `--json` it is a list a script can filter, and the id it prints is exactly what
+`elva import postman` takes:
+
+```bash
+uid=$(elva --json import postman --list \
+  | jq -r '.collections[] | select(.name == "Billing") | .uid')
+elva import postman "$uid"
+```
+
+Naming one is required wherever there is nobody to ask -- in CI, under `--json`, or with
+output redirected. `elva import postman` with nothing named exits `2` there, listing what
+was available, rather than guessing which of your collections you meant.
 
 ## Inspecting collections
 
@@ -288,6 +380,10 @@ Settings can come from several places. Highest priority wins:
 4. The selected profile in your user config
 5. Your user config
 6. Built in defaults
+
+`ELVA_TOKEN` and `ELVA_POSTMAN_API_KEY` are credentials rather than settings. They are
+read from the environment only, never from a config file, and a config file that names
+one is rejected -- `elva.json` is meant to be committed.
 
 ### Project file
 

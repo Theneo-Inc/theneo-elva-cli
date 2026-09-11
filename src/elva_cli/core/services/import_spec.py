@@ -9,10 +9,18 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from elva_cli.auth import get_access_token, refresh_now
-from elva_cli.core.api.http import HttpError, default_error, get_json, send_form, send_json
+from elva_cli.core.api.collections import (
+    collection_link,
+    endpoint_count,
+    require_id,
+    text,
+)
+from elva_cli.core.api.http import HttpError, default_error, get_json, send_form
 from elva_cli.core.api.targets import Target, resolve_collection, resolve_workspace
 from elva_cli.core.services.import_result import Action, DryRunResult, ImportSpecResult
 from elva_cli.core.spec.detect import FORMATS, SpecFormat, SpecMeta, detect_format, read_meta
+from elva_cli.core.spec.fetch import SpecFetchError, fetch_spec
+from elva_cli.core.spec.normalize import to_yaml
 from elva_cli.errors import ApiError, ElvaError, UsageError, ValidationError
 
 if TYPE_CHECKING:
@@ -20,10 +28,12 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 _HTTP_TIMEOUT = 120.0
+_URL_FETCH_TIMEOUT = 30.0
 
 MAX_BYTES = 10 * 1024 * 1024
 MAX_NAME = 100
 EXTENSIONS = (".json", ".yaml", ".yml")
+_YAML_SUFFIXES = (".yaml", ".yml")
 _FIELD = "spec"
 
 _STDIN_SOURCE = "<stdin>"
@@ -54,8 +64,9 @@ def import_spec(
     dry_run: bool = False,
 ) -> ImportSpecResult | DryRunResult:
     """Create a collection from a spec, or update one with --update."""
-    source, data = _read_source(path=path, stdin=stdin, spec_url=spec_url)
-    resolved, meta = _inspect(data, spec_format, source)
+    source, raw = _read_source(path=path, stdin=stdin, spec_url=spec_url, base_url=base_url)
+    resolved, meta = _inspect(raw, spec_format, source)
+    data = _converted(raw, source)
     action = Action.UPDATED if update else Action.CREATED
     target_name = _target_name(
         update=update, collection=collection, name=name, meta=meta, prompt=prompt_for_name
@@ -70,7 +81,7 @@ def import_spec(
             endpoints=meta.endpoints,
             spec_title=meta.title,
             spec_version=meta.version,
-            size_bytes=len(data) if data is not None else None,
+            size_bytes=len(data),
         )
 
     token = get_access_token(base_url=base_url)
@@ -90,7 +101,6 @@ def import_spec(
             collection=target_name,
             source=source,
             data=data,
-            spec_url=spec_url,
             reauth=reauth,
         )
     else:
@@ -101,45 +111,53 @@ def import_spec(
             name=target_name,
             source=source,
             data=data,
-            spec_url=spec_url,
         )
 
     doc = outcome.doc
     return ImportSpecResult(
         action=str(action),
-        collection=_text(doc.get("name")) or outcome.target.name,
+        collection=text(doc.get("name")) or outcome.target.name,
         collection_id=outcome.target.id,
         workspace=space.name,
         source=source,
         spec_format=str(resolved),
-        endpoints=_endpoint_count(doc),
-        spec_title=_text(doc.get("specTitle")),
-        spec_version=_text(doc.get("specVersion")),
-        url=_collection_link(base_url, outcome.target.id),
+        endpoints=endpoint_count(doc),
+        spec_title=text(doc.get("specTitle")),
+        spec_version=text(doc.get("specVersion")),
+        url=collection_link(base_url, outcome.target.id),
         metadata_confirmed=outcome.metadata_confirmed,
         published_mcps=outcome.published_mcps,
     )
 
 
 def _read_source(
-    *, path: Path | None, stdin: bytes | None, spec_url: str | None
-) -> tuple[str, bytes | None]:
-    """The spec's display name, and its bytes when we hold them.
+    *, path: Path | None, stdin: bytes | None, spec_url: str | None, base_url: str
+) -> tuple[str, bytes]:
+    """The spec's display name and its bytes, exactly as they arrived.
 
-    A URL is fetched server-side, so there is nothing local to read -- which is
-    also why --name cannot be defaulted from it.
+    A URL is fetched through Elva's proxy -- the same path the web app uses --
+    so the bytes come back here to be inspected and named like a local file,
+    rather than the server being handed a link.
+
+    Nothing is converted here. `_inspect` has to see the document the user
+    actually has, and the size limit has to report a number they can check
+    against their own file; `_converted` runs after both.
     """
     given = [given for given in (path, stdin, spec_url) if given is not None]
     if len(given) != 1:
         raise UsageError(
             "give exactly one of FILE, --url or -",
-            hint="A path uploads the file, --url has the server fetch it, - reads stdin.",
+            hint="A path uploads the file, --url has Elva fetch it, - reads stdin.",
         )
 
     if spec_url is not None:
         if not spec_url.startswith(("http://", "https://")):
             raise UsageError(f"--url must start with http:// or https://, got {spec_url!r}")
-        return spec_url, None
+        try:
+            fetched = fetch_spec(base_url=base_url, url=spec_url, timeout=_URL_FETCH_TIMEOUT)
+        except SpecFetchError as exc:
+            raise UsageError(str(exc)) from exc
+        return spec_url, _checked(fetched, spec_url)
 
     if stdin is not None:
         return _STDIN_SOURCE, _checked(stdin, _STDIN_SOURCE)
@@ -168,17 +186,45 @@ def _read_source(
 
 
 def _checked(data: bytes, source: str) -> bytes:
+    """The source as it stands, measured before anything rewrites it, so the
+    size in the error is one the user can check against their own file."""
     if not data.strip():
         raise UsageError(f"{source} is empty")
     if len(data) > MAX_BYTES:
+        raise UsageError(f"{source} is {_mb(data)}; the limit is 10 MB")
+    return data
+
+
+def _converted(raw: bytes, source: str) -> bytes:
+    """The bytes that actually go up: a JSON spec re-serialised as YAML.
+
+    This runs after `_inspect`, never before. `detect_format` only sniffs the
+    first `SNIFF_BYTES`, and YAML expands a minified JSON document by roughly a
+    fifth -- enough to push `openapi:` or `_postman_id` past that window for a
+    document only a few KB long. Converting first made a valid 6.7 KB spec
+    report "could not tell whether ... is an OpenAPI document or a Postman
+    collection", and hid a 7.4 KB Postman collection from the refusal that
+    exists to stop it being uploaded as a spec.
+
+    The limit is checked again here because the conversion can cross it on its
+    own, and the message names both numbers -- the one on disk does not explain
+    the failure by itself.
+    """
+    data = to_yaml(raw)
+    if len(data) > MAX_BYTES:
         raise UsageError(
-            f"{source} is {len(data) / 1024 / 1024:.1f} MB; the limit is 10 MB",
-            hint="Split the spec, or import it with --url so the server fetches it.",
+            f"{source} is {_mb(raw)} as it stands, but {_mb(data)} once converted to "
+            f"YAML for upload; the limit is 10 MB",
+            hint="Elva stores specs as YAML, the same as the web app does.",
         )
     return data
 
 
-def _inspect(data: bytes | None, requested: str | None, source: str) -> tuple[SpecFormat, SpecMeta]:
+def _mb(data: bytes) -> str:
+    return f"{len(data) / 1024 / 1024:.1f} MB"
+
+
+def _inspect(data: bytes, requested: str | None, source: str) -> tuple[SpecFormat, SpecMeta]:
     """Format and whatever the document says about itself.
 
     Detection runs even when --format was given: the flag settles what an
@@ -188,8 +234,6 @@ def _inspect(data: bytes | None, requested: str | None, source: str) -> tuple[Sp
     declared = _declared(requested)
     if declared is SpecFormat.POSTMAN:
         raise _postman_error(source)
-    if data is None:
-        return declared or SpecFormat.OPENAPI, SpecMeta()
 
     detected = detect_format(data)
     if detected is SpecFormat.POSTMAN:
@@ -206,10 +250,13 @@ def _inspect(data: bytes | None, requested: str | None, source: str) -> tuple[Sp
 
 def _postman_error(source: str) -> UsageError:
     """No --format override here: forcing openapi uploads the collection and
-    yields nothing, which is the outcome this refusal exists to prevent."""
+    yields nothing, which is the outcome this refusal exists to prevent.
+
+    Elva does import Postman collections, just not out of a file: it pulls them
+    from Postman's own API, which is what `elva import postman` drives."""
     return UsageError(
         f"{source} is a Postman collection, and Elva cannot import one from a file",
-        hint="Export it as OpenAPI first, or use the Postman integration in the web app.",
+        hint="Run 'elva import postman' to pull it from Postman, or export it as OpenAPI first.",
     )
 
 
@@ -269,39 +316,34 @@ def _create(
     company_id: str,
     name: str,
     source: str,
-    data: bytes | None,
-    spec_url: str | None,
+    data: bytes,
 ) -> _Outcome:
     """POST a new collection. The route awaits its metadata extraction and
     re-reads before answering, so this reply is already correct."""
     url = f"{base_url}/api/companies/{company_id}/collections"
     try:
-        if data is None:
-            assert spec_url is not None
-            body = send_json(
-                url,
-                token=token,
-                method="POST",
-                payload={"name": name, "specUrl": spec_url},
-                timeout=_HTTP_TIMEOUT,
-            )
-        else:
-            body = send_form(
-                url,
-                token=token,
-                method="POST",
-                fields={"name": name},
-                field=_FIELD,
-                filename=_upload_name(source),
-                data=data,
-                content_type=_content_type(data),
-                timeout=_HTTP_TIMEOUT,
-            )
+        body = send_form(
+            url,
+            token=token,
+            method="POST",
+            fields={"name": name},
+            field=_FIELD,
+            filename=_upload_name(source, data),
+            data=data,
+            content_type=_content_type(data),
+            timeout=_HTTP_TIMEOUT,
+        )
     except HttpError as exc:
         raise _create_error(exc, name=name) from exc
 
     doc = _document(body)
-    return _Outcome(Target(id=_require_id(doc), name=_text(doc.get("name")) or name), doc, True)
+    return _Outcome(
+        Target(
+            id=require_id(doc, message=_UNEXPECTED_RESPONSE), name=text(doc.get("name")) or name
+        ),
+        doc,
+        True,
+    )
 
 
 def _update(
@@ -311,8 +353,7 @@ def _update(
     company_id: str,
     collection: str,
     source: str,
-    data: bytes | None,
-    spec_url: str | None,
+    data: bytes,
     reauth: Callable[[str], str] | None = None,
 ) -> _Outcome:
     target = resolve_collection(
@@ -324,27 +365,17 @@ def _update(
     )
     url = f"{base_url}/api/companies/{company_id}/collections/{target.id}"
     try:
-        if data is None:
-            assert spec_url is not None
-            body = send_json(
-                url,
-                token=token,
-                method="PATCH",
-                payload={"specUrl": spec_url},
-                timeout=_HTTP_TIMEOUT,
-            )
-        else:
-            body = send_form(
-                url,
-                token=token,
-                method="PATCH",
-                fields={},
-                field=_FIELD,
-                filename=_upload_name(source),
-                data=data,
-                content_type=_content_type(data),
-                timeout=_HTTP_TIMEOUT,
-            )
+        body = send_form(
+            url,
+            token=token,
+            method="PATCH",
+            fields={},
+            field=_FIELD,
+            filename=_upload_name(source, data),
+            data=data,
+            content_type=_content_type(data),
+            timeout=_HTTP_TIMEOUT,
+        )
     except HttpError as exc:
         raise _update_error(exc, collection=target.name) from exc
 
@@ -359,33 +390,37 @@ def _update(
     return _Outcome(target, doc, confirmed, mcps)
 
 
-def _upload_name(source: str) -> str:
-    """A filename for the multipart part.
+def _upload_name(source: str, data: bytes) -> str:
+    """A filename for the multipart part, with an extension matching the bytes.
 
     The route's fileFilter accepts on media type and only falls back to the
     extension when that type is generic (octet-stream, text/plain, empty).
-    _content_type always sends a specific one, so this name is never what
-    decides acceptance -- stdin just needs to send something.
+    _content_type always sends a specific one, so this name never decides
+    acceptance -- but a JSON spec goes up as YAML, so `payments.json` would
+    name a file that is not JSON for anything downstream reading the extension
+    instead of the body.
+
+    A local name is kept otherwise: only the extension is corrected, and only
+    when it disagrees with what is actually being sent. `.yml` already agrees.
     """
-    return "spec.json" if source == _STDIN_SOURCE else source
+    json_bytes = data.lstrip()[:1] in (b"{", b"[")
+    if source == _STDIN_SOURCE or "://" in source:
+        return "spec.json" if json_bytes else "spec.yaml"
+
+    import pathlib
+
+    name = pathlib.PurePosixPath(source)
+    wanted = ".json" if json_bytes else ".yaml"
+    suffix = name.suffix.lower()
+    if suffix == wanted or (not json_bytes and suffix in _YAML_SUFFIXES):
+        return source
+    return name.with_suffix(wanted).name
 
 
 def _content_type(data: bytes) -> str:
     """From the content, not the filename, so the route's fileFilter accepts it
     outright instead of falling back to the extension."""
     return "application/json" if data.lstrip()[:1] in (b"{", b"[") else "application/yaml"
-
-
-def _collection_link(base_url: str, collection_id: str) -> str | None:
-    """The web app is the same host with `api` swapped for `app`. A base_url
-    that does not follow that shape gets no link rather than a wrong one."""
-    import urllib.parse
-
-    parts = urllib.parse.urlsplit(base_url)
-    if not parts.netloc.startswith(("api.", "api-")):
-        return None
-    host = "app" + parts.netloc[3:]
-    return f"{parts.scheme}://{host}/collections?selected={collection_id}"
 
 
 def _create_error(error: HttpError, *, name: str) -> ElvaError:
@@ -420,16 +455,8 @@ def _document(body: Any) -> dict[str, Any]:
     return doc
 
 
-def _require_id(doc: dict[str, Any]) -> str:
-    for key in ("id", "_id"):
-        value = doc.get(key)
-        if isinstance(value, str) and value:
-            return value
-    raise ApiError(_UNEXPECTED_RESPONSE)
-
-
 def _metadata(doc: dict[str, Any]) -> tuple[str | None, str | None, int | None]:
-    return _text(doc.get("specTitle")), _text(doc.get("specVersion")), _endpoint_count(doc)
+    return text(doc.get("specTitle")), text(doc.get("specVersion")), endpoint_count(doc)
 
 
 def _settled(
@@ -487,21 +514,8 @@ def _published_mcps(body: Any) -> tuple[str, ...]:
     if not isinstance(rows, list):
         return ()
     names = [
-        _text(row.get("mcpName")) or _text(row.get("mcpSlug")) or ""
+        text(row.get("mcpName")) or text(row.get("mcpSlug")) or ""
         for row in rows
         if isinstance(row, dict) and row.get("status") == "published"
     ]
     return tuple(name for name in names if name)
-
-
-def _endpoint_count(doc: dict[str, Any]) -> int | None:
-    """The list route sends a count; a single document sends the array."""
-    count = doc.get("endpointCount")
-    if isinstance(count, int):
-        return count
-    endpoints = doc.get("endpoints")
-    return len(endpoints) if isinstance(endpoints, list) else None
-
-
-def _text(value: Any) -> str | None:
-    return value.strip() if isinstance(value, str) and value.strip() else None

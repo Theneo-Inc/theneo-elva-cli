@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from elva_cli.core.api.collections import collection_link
 from elva_cli.core.api.http import HttpError
 from elva_cli.core.api.targets import Target
 from elva_cli.core.services import import_spec as service
 from elva_cli.core.services.import_result import DryRunResult, ImportSpecResult
+from elva_cli.core.spec.fetch import SpecFetchError
 from elva_cli.errors import ApiError, AuthError, UsageError, ValidationError
 
 if TYPE_CHECKING:
@@ -19,6 +22,10 @@ COLLECTION = "89abcdef0123456789abcdef"
 
 OPENAPI = (
     b'openapi: 3.0.3\ninfo:\n  title: Payments\n  version: "2.1"\npaths:\n  /a:\n    get: {}\n'
+)
+OPENAPI_JSON = (
+    b'{"openapi": "3.0.3", "info": {"title": "Payments", "version": "2.1"}, '
+    b'"paths": {"/a": {"get": {}}}}'
 )
 POSTMAN = (
     b'{"info": {"_postman_id": "abc", "schema": '
@@ -66,26 +73,22 @@ def form(monkeypatch: pytest.MonkeyPatch, response: Any = CREATED) -> dict[str, 
     return seen
 
 
-def body(monkeypatch: pytest.MonkeyPatch, response: Any = CREATED) -> dict[str, Any]:
-    """Same, for the JSON path used by --url."""
-    seen: dict[str, Any] = {}
-
-    def fake(url: str, **kwargs: Any) -> Any:
-        seen.update(kwargs, url=url)
-        if isinstance(response, Exception):
-            raise response
-        return response
-
-    monkeypatch.setattr(service, "send_json", fake)
-    return seen
-
-
 def nothing_sent(monkeypatch: pytest.MonkeyPatch) -> None:
     def fail(*args: Any, **kwargs: Any) -> Any:
         raise AssertionError("nothing should have been sent")
 
     monkeypatch.setattr(service, "send_form", fail)
-    monkeypatch.setattr(service, "send_json", fail)
+
+
+def fetched(monkeypatch: pytest.MonkeyPatch, content: bytes | Exception = OPENAPI_JSON) -> None:
+    """Stand in for the URL fetch so no test touches the network."""
+
+    def fake(*, base_url: str, url: str, timeout: float) -> bytes:
+        if isinstance(content, Exception):
+            raise content
+        return content
+
+    monkeypatch.setattr(service, "fetch_spec", fake)
 
 
 class TestCreate:
@@ -118,13 +121,27 @@ class TestCreate:
             url=f"https://app.getelva.ai/collections?selected={COLLECTION}",
         )
 
-    def test_the_file_goes_up_byte_for_byte(
+    def test_a_yaml_file_goes_up_byte_for_byte(
         self, monkeypatch: pytest.MonkeyPatch, spec_file: Path, signed_in: None
     ) -> None:
         seen = form(monkeypatch)
         service.import_spec(base_url=BASE_URL, path=spec_file)
         assert seen["data"] == OPENAPI
         assert seen["filename"] == "payments.yaml"
+
+    def test_a_json_file_is_converted_to_yaml_first(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, signed_in: None
+    ) -> None:
+        """The web app stores YAML whichever way a spec came in; a CLI import
+        matches instead of leaving one minified JSON line."""
+        import yaml
+
+        path = tmp_path / "payments.json"
+        path.write_bytes(OPENAPI_JSON)
+        seen = form(monkeypatch)
+        service.import_spec(base_url=BASE_URL, path=path)
+        assert seen["data"].lstrip()[:1] not in (b"{", b"[")
+        assert yaml.safe_load(seen["data"])["info"]["title"] == "Payments"
 
     def test_a_duplicate_name_points_at_update(
         self, monkeypatch: pytest.MonkeyPatch, spec_file: Path, signed_in: None
@@ -252,27 +269,59 @@ class TestUpdate:
 
 
 class TestUrlSource:
-    def test_a_url_is_handed_to_the_server(
+    def test_a_url_is_fetched_through_elva_and_uploaded_as_a_file(
         self, monkeypatch: pytest.MonkeyPatch, signed_in: None
     ) -> None:
-        seen = body(monkeypatch)
-        service.import_spec(base_url=BASE_URL, spec_url="https://x.dev/o.yaml", name="Remote")
-        assert seen["payload"] == {"name": "Remote", "specUrl": "https://x.dev/o.yaml"}
+        fetched(monkeypatch, OPENAPI_JSON)
+        seen = form(monkeypatch)
+        service.import_spec(base_url=BASE_URL, spec_url="https://x.dev/o.json", name="Remote")
         assert seen["method"] == "POST"
+        assert seen["fields"] == {"name": "Remote"}
+        assert b"openapi" in seen["data"]
 
-    def test_a_url_needs_a_name_because_nothing_is_read_locally(
+    def test_a_json_url_is_stored_as_yaml(
         self, monkeypatch: pytest.MonkeyPatch, signed_in: None
     ) -> None:
+        import yaml
+
+        fetched(monkeypatch, OPENAPI_JSON)
+        seen = form(monkeypatch)
+        service.import_spec(base_url=BASE_URL, spec_url="https://x.dev/o.json", name="R")
+        assert seen["data"].lstrip()[:1] not in (b"{", b"[")
+        assert seen["filename"] == "spec.yaml"
+        assert yaml.safe_load(seen["data"])["info"]["title"] == "Payments"
+
+    def test_the_name_now_defaults_from_the_fetched_title(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None
+    ) -> None:
+        fetched(monkeypatch, OPENAPI_JSON)
+        seen = form(monkeypatch)
+        service.import_spec(base_url=BASE_URL, spec_url="https://x.dev/o.json")
+        assert seen["fields"]["name"] == "Payments"
+
+    def test_a_titleless_url_spec_still_needs_a_name(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None
+    ) -> None:
+        fetched(monkeypatch, b'{"openapi": "3.0.3", "paths": {}}')
         nothing_sent(monkeypatch)
         with pytest.raises(UsageError, match="no name"):
-            service.import_spec(base_url=BASE_URL, spec_url="https://x.dev/o.yaml")
+            service.import_spec(base_url=BASE_URL, spec_url="https://x.dev/o.json")
 
-    def test_a_non_http_url_is_usage(
+    def test_a_non_http_url_is_usage_before_any_fetch(
         self, monkeypatch: pytest.MonkeyPatch, signed_in: None
     ) -> None:
+        fetched(monkeypatch, SpecFetchError("should not have been called"))
         nothing_sent(monkeypatch)
         with pytest.raises(UsageError, match="http"):
             service.import_spec(base_url=BASE_URL, spec_url="ftp://x.dev/o.yaml", name="X")
+
+    def test_a_fetch_failure_is_a_usage_error(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None
+    ) -> None:
+        fetched(monkeypatch, SpecFetchError("could not fetch https://x.dev/o.json: 404"))
+        nothing_sent(monkeypatch)
+        with pytest.raises(UsageError, match="could not fetch"):
+            service.import_spec(base_url=BASE_URL, spec_url="https://x.dev/o.json", name="X")
 
 
 class TestStdin:
@@ -360,7 +409,7 @@ class TestRefusedBeforeTheNetwork:
 
     def test_a_file_over_the_upload_limit_names_it(self, tmp_path: Path) -> None:
         path = tmp_path / "huge.json"
-        path.write_bytes(b'{"openapi":"3.0.0"}' + b" " * (10 * 1024 * 1024))
+        path.write_bytes(b'{"openapi":"3.0.0","x":"' + b"A" * (10 * 1024 * 1024) + b'"}')
         with pytest.raises(UsageError, match="10 MB"):
             service.import_spec(base_url=BASE_URL, path=path)
 
@@ -449,7 +498,7 @@ class TestPostmanIsRefused:
     def test_format_postman_is_refused_on_a_url_too(
         self, monkeypatch: pytest.MonkeyPatch, signed_in: None
     ) -> None:
-        """--url sends no bytes to sniff, so the declared format is all there is."""
+        fetched(monkeypatch, OPENAPI_JSON)
         nothing_sent(monkeypatch)
         with pytest.raises(UsageError, match="Postman collection"):
             service.import_spec(
@@ -458,6 +507,14 @@ class TestPostmanIsRefused:
                 spec_format="postman",
                 name="X",
             )
+
+    def test_a_postman_collection_at_a_url_is_detected_and_refused(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None
+    ) -> None:
+        fetched(monkeypatch, POSTMAN)
+        nothing_sent(monkeypatch)
+        with pytest.raises(UsageError, match="Postman collection"):
+            service.import_spec(base_url=BASE_URL, spec_url="https://example.com/c.json", name="X")
 
 
 class TestDryRun:
@@ -510,6 +567,25 @@ class TestDryRun:
         path.write_bytes(OPENAPI)
         with pytest.raises(UsageError):
             service.import_spec(base_url=BASE_URL, path=path, dry_run=True)
+
+    def test_a_url_dry_run_reports_the_fetched_spec(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The fetch happens (it is a read), but nothing is uploaded and no
+        token is needed."""
+
+        def no_token(*, base_url: str) -> str:
+            raise AssertionError("should not have asked for a token")
+
+        monkeypatch.setattr(service, "get_access_token", no_token)
+        fetched(monkeypatch, OPENAPI_JSON)
+        nothing_sent(monkeypatch)
+
+        result = service.import_spec(
+            base_url=BASE_URL, spec_url="https://x.dev/o.json", dry_run=True
+        )
+        assert isinstance(result, DryRunResult)
+        assert result.spec_title == "Payments"
+        assert result.endpoints == 1
+        assert result.size_bytes is not None
 
 
 class TestErrorMapping:
@@ -597,10 +673,10 @@ class TestCollectionLink:
         ],
     )
     def test_the_web_app_host_is_derived(self, base: str, expected: str) -> None:
-        assert service._collection_link(base, "x") == expected
+        assert collection_link(base, "x") == expected
 
     def test_an_unrecognised_host_gets_no_link_rather_than_a_wrong_one(self) -> None:
-        assert service._collection_link("http://localhost:5001", "x") is None
+        assert collection_link("http://localhost:5001", "x") is None
 
     @pytest.mark.parametrize(
         "base",
@@ -613,7 +689,7 @@ class TestCollectionLink:
     def test_a_host_that_merely_starts_with_api_gets_no_link(self, base: str) -> None:
         """api2 would map to an app2 that does not exist, and a link to a host
         that is not there is worse than no link at all."""
-        assert service._collection_link(base, "x") is None
+        assert collection_link(base, "x") is None
 
 
 class TestPublishedMcps:
@@ -751,3 +827,283 @@ class TestSettlingOnUpdate:
         )
         assert doc is uploaded
         assert confirmed is False
+
+
+def _big_openapi(count: int) -> bytes:
+    """Minified JSON with `paths` ahead of `openapi`, so the marker sits near
+    the end. Real specs do this: key order is whatever the generator emitted."""
+    import json
+
+    paths = {
+        f"/res{i}": {
+            "get": {"summary": f"Get resource {i}", "responses": {"200": {"description": "ok"}}}
+        }
+        for i in range(count)
+    }
+    doc = {"paths": paths, "openapi": "3.0.3", "info": {"title": "Payments", "version": "2.1"}}
+    return json.dumps(doc, separators=(",", ":")).encode()
+
+
+def _big_postman(count: int) -> bytes:
+    """The same shape for a collection: `item` first, `info` -- which carries
+    both markers detect_format looks for -- last."""
+    import json
+
+    doc = {
+        "item": [
+            {
+                "name": f"request number {i}",
+                "request": {
+                    "method": "GET",
+                    "header": [],
+                    "url": {
+                        "raw": f"https://example.com/api/v1/resource/{i}",
+                        "host": ["example", "com"],
+                        "path": ["api", "v1", "resource", str(i)],
+                    },
+                },
+            }
+            for i in range(count)
+        ],
+        "info": {
+            "_postman_id": "abc",
+            "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+        },
+    }
+    return json.dumps(doc, separators=(",", ":")).encode()
+
+
+class TestDetectionSeesTheDocumentTheUserHas:
+    """JSON->YAML conversion used to run inside _read_source, so _inspect
+    sniffed the converted bytes. detect_format only reads the first
+    SNIFF_BYTES, and YAML expands a minified document by roughly a fifth -- so
+    a marker comfortably inside the window on disk could sit outside it by the
+    time detection ran. Conversion happens after _inspect now.
+    """
+
+    def test_a_valid_json_spec_is_not_made_unrecognisable_by_conversion(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, signed_in: None
+    ) -> None:
+        from elva_cli.core.spec.detect import SNIFF_BYTES, detect_format
+        from elva_cli.core.spec.normalize import to_yaml
+
+        raw = _big_openapi(76)
+        assert len(raw) < SNIFF_BYTES, "the marker must be inside the window on disk"
+        assert detect_format(raw) is not None
+        assert detect_format(to_yaml(raw)) is None, (
+            "conversion must push it out, or this proves nothing"
+        )
+
+        path = tmp_path / "payments.json"
+        path.write_bytes(raw)
+        seen = form(monkeypatch)
+        result = service.import_spec(base_url=BASE_URL, path=path)
+        assert isinstance(result, ImportSpecResult)
+        assert result.spec_format == "openapi"
+        assert seen["fields"]["name"] == "Payments"
+
+    def test_a_postman_collection_is_still_refused_when_conversion_would_hide_it(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, signed_in: None
+    ) -> None:
+        """The worse half: undetected, `--format openapi` uploads the
+        collection, which is exactly what _postman_error exists to prevent."""
+        from elva_cli.core.spec.detect import detect_format
+        from elva_cli.core.spec.normalize import to_yaml
+
+        raw = _big_postman(36)
+        assert detect_format(raw) is not None
+        assert detect_format(to_yaml(raw)) is None
+
+        path = tmp_path / "collection.json"
+        path.write_bytes(raw)
+        nothing_sent(monkeypatch)
+        with pytest.raises(UsageError, match="Postman collection"):
+            service.import_spec(base_url=BASE_URL, path=path, spec_format="openapi")
+
+    def test_a_url_fetched_spec_is_inspected_before_conversion_too(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None
+    ) -> None:
+        fetched(monkeypatch, _big_openapi(76))
+        form(monkeypatch)
+        result = service.import_spec(base_url=BASE_URL, spec_url="https://example.com/spec.json")
+        assert isinstance(result, ImportSpecResult)
+        assert result.spec_format == "openapi"
+
+    def test_the_bytes_that_go_up_are_still_yaml(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, signed_in: None
+    ) -> None:
+        """Inspecting the raw bytes must not have stopped the conversion."""
+        path = tmp_path / "payments.json"
+        path.write_bytes(OPENAPI_JSON)
+        seen = form(monkeypatch)
+        service.import_spec(base_url=BASE_URL, path=path)
+        assert not seen["data"].lstrip().startswith(b"{")
+        assert b"openapi: 3.0.3" in seen["data"]
+
+
+class TestTheSizeLimitIsMeasuredOnWhatTheUserHas:
+    """The limit used to be applied to the converted bytes, so a file well
+    under 10 MB on disk could be refused with a size that appeared nowhere the
+    user could look."""
+
+    def test_the_refusal_reports_the_size_of_the_file_on_disk(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, signed_in: None
+    ) -> None:
+        monkeypatch.setattr(service, "MAX_BYTES", 1024)
+        path = tmp_path / "payments.json"
+        path.write_bytes(b'{"openapi":"3.0.3","x":"' + b"a" * 4096 + b'"}')
+        nothing_sent(monkeypatch)
+        with pytest.raises(UsageError, match=r"payments\.json is 0\.0 MB; the limit is 10 MB"):
+            service.import_spec(base_url=BASE_URL, path=path)
+
+    def test_a_file_that_only_crosses_the_limit_once_converted_names_both_sizes(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, signed_in: None
+    ) -> None:
+        """Still a refusal -- the upload really would be over -- but the
+        message has to explain why the number differs from the file."""
+        raw = _big_openapi(76)
+        monkeypatch.setattr(service, "MAX_BYTES", len(raw) + 1)
+        path = tmp_path / "payments.json"
+        path.write_bytes(raw)
+        nothing_sent(monkeypatch)
+        with pytest.raises(UsageError, match="once converted to YAML") as caught:
+            service.import_spec(base_url=BASE_URL, path=path)
+        assert "as it stands" in str(caught.value)
+        assert "YAML" in (caught.value.hint or "")
+
+    def test_an_empty_file_is_still_caught(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, signed_in: None
+    ) -> None:
+        path = tmp_path / "payments.json"
+        path.write_bytes(b"   \n")
+        nothing_sent(monkeypatch)
+        with pytest.raises(UsageError, match="empty"):
+            service.import_spec(base_url=BASE_URL, path=path)
+
+
+class TestTheUploadedFilenameMatchesTheBytes:
+    """A JSON spec is converted to YAML on the way up. The stdin and URL
+    branches already picked an extension matching the bytes; a local file kept
+    its own name, so `payments.json` named a part containing YAML -- with
+    `application/yaml` on the same part contradicting it."""
+
+    def test_a_local_json_spec_goes_up_named_yaml(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, signed_in: None
+    ) -> None:
+        path = tmp_path / "payments.json"
+        path.write_bytes(OPENAPI_JSON)
+        seen = form(monkeypatch)
+        service.import_spec(base_url=BASE_URL, path=path)
+        assert seen["filename"] == "payments.yaml"
+        assert seen["content_type"] == "application/yaml"
+
+    def test_the_displayed_source_still_names_the_real_file(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, signed_in: None
+    ) -> None:
+        """Only the multipart part is renamed. The user is told what they
+        actually passed."""
+        path = tmp_path / "payments.json"
+        path.write_bytes(OPENAPI_JSON)
+        form(monkeypatch)
+        result = service.import_spec(base_url=BASE_URL, path=path)
+        assert isinstance(result, ImportSpecResult)
+        assert result.source == "payments.json"
+
+    def test_a_yaml_spec_keeps_its_name_untouched(
+        self, monkeypatch: pytest.MonkeyPatch, spec_file: Path, signed_in: None
+    ) -> None:
+        seen = form(monkeypatch)
+        service.import_spec(base_url=BASE_URL, path=spec_file)
+        assert seen["filename"] == "payments.yaml"
+
+    def test_a_yml_spec_is_not_churned_to_yaml(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, signed_in: None
+    ) -> None:
+        """`.yml` already agrees with the bytes, so there is nothing to fix."""
+        path = tmp_path / "payments.yml"
+        path.write_bytes(OPENAPI)
+        seen = form(monkeypatch)
+        service.import_spec(base_url=BASE_URL, path=path)
+        assert seen["filename"] == "payments.yml"
+
+    def test_a_name_with_dots_in_it_only_loses_the_extension(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, signed_in: None
+    ) -> None:
+        path = tmp_path / "payments.v2.json"
+        path.write_bytes(OPENAPI_JSON)
+        seen = form(monkeypatch)
+        service.import_spec(base_url=BASE_URL, path=path)
+        assert seen["filename"] == "payments.v2.yaml"
+
+
+class TestAProxyTimeoutIsAboutTheSpecUrl:
+    """`_send` raises ApiError, not HttpError, so `fetch_spec` used to let a
+    timeout past and a slow spec host surfaced as `ELVA_API: Could not reach
+    the server.` (exit 5), telling the user to check their Elva connection.
+
+    Only the timeout is reframed. Elva being unreachable produces the same
+    OSError family but means the opposite thing, and exit 5 is what tells a
+    pipeline to retry -- so it must keep its code and keep naming Elva.
+    """
+
+    def test_a_timeout_becomes_a_usage_error_naming_the_url(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None
+    ) -> None:
+        """End to end through the real fetch_spec -- the stub sits where urllib
+        would, so the mapping under test is the one that runs."""
+        from elva_cli.core.api import http
+        from elva_cli.core.spec import fetch
+
+        def slow(*args: Any, **kwargs: Any) -> Any:
+            raise ApiError(http.TIMED_OUT)
+
+        monkeypatch.setattr(fetch, "send_json", slow)
+        nothing_sent(monkeypatch)
+        with pytest.raises(UsageError) as caught:
+            service.import_spec(base_url=BASE_URL, spec_url="https://slow.dev/o.json", name="X")
+        assert caught.value.exit_code.value == 2
+        assert "slow.dev" in str(caught.value)
+
+    def test_fetch_spec_maps_it_at_the_source(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from elva_cli.core.api import http
+        from elva_cli.core.spec import fetch
+
+        def slow(*args: Any, **kwargs: Any) -> Any:
+            raise ApiError(http.TIMED_OUT)
+
+        monkeypatch.setattr(fetch, "send_json", slow)
+        with pytest.raises(SpecFetchError, match=re.escape("https://slow.dev/o.json")):
+            fetch.fetch_spec(base_url=BASE_URL, url="https://slow.dev/o.json", timeout=1.0)
+
+    def test_an_unreachable_elva_is_not_blamed_on_the_spec_url(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Offline laptop, DNS failure, typo'd --base-url: all reach here as
+        UNREACHABLE. Reporting the spec's host would send the user to the wrong
+        place, and exit 2 would drop the retry signal a pipeline needs."""
+        from elva_cli.core.api import http
+        from elva_cli.core.spec import fetch
+
+        def offline(*args: Any, **kwargs: Any) -> Any:
+            raise ApiError(http.UNREACHABLE)
+
+        monkeypatch.setattr(fetch, "send_json", offline)
+        with pytest.raises(ApiError) as caught:
+            fetch.fetch_spec(base_url=BASE_URL, url="https://x.dev/o.json", timeout=1.0)
+        assert caught.value.exit_code.value == 5
+        assert "x.dev" not in str(caught.value)
+
+    def test_an_elva_side_failure_is_still_an_api_error(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A redirect means the configured base URL is wrong -- that is about
+        Elva, not the spec URL, so it must not be reframed as one."""
+        from elva_cli.core.api import http
+        from elva_cli.core.spec import fetch
+
+        def redirected(*args: Any, **kwargs: Any) -> Any:
+            raise ApiError(http.REDIRECTED)
+
+        monkeypatch.setattr(fetch, "send_json", redirected)
+        with pytest.raises(ApiError, match="base URL"):
+            fetch.fetch_spec(base_url=BASE_URL, url="https://x.dev/o.json", timeout=1.0)

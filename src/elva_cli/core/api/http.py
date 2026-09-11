@@ -27,6 +27,8 @@ _RETRIABLE_METHODS = frozenset({"GET", "HEAD"})
 
 DEFAULT_TIMEOUT = 30.0
 UNEXPECTED_RESPONSE = "The server returned an unexpected response."
+UNREACHABLE = "Could not reach the server."
+TIMED_OUT = "The server did not answer in time."
 REDIRECTED = "The server redirected the request. Check the configured base URL."
 _REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
 
@@ -66,12 +68,13 @@ def get_json(
 def send_json(
     url: str,
     *,
-    token: str,
+    token: str | None,
     method: str,
     payload: Mapping[str, Any],
     timeout: float = DEFAULT_TIMEOUT,
     reauth: Callable[[str], str] | None = None,
 ) -> Any:
+    """`token=None` sends no Authorization header, for Elva's few public routes."""
     return _send(
         url,
         token=token,
@@ -182,7 +185,7 @@ def _opener() -> Any:
 def _send(
     url: str,
     *,
-    token: str,
+    token: str | None,
     method: str,
     body: bytes | None = None,
     content_type: str | None = None,
@@ -198,7 +201,12 @@ def _send(
         # (e.g. it expired mid-command, or a sibling process rotated it).
         # Refresh once and retry - but only for idempotent methods, so a
         # POST/PATCH that already reached the server is never replayed.
-        if exc.status != 401 or reauth is None or method.upper() not in _RETRIABLE_METHODS:
+        if (
+            exc.status != 401
+            or reauth is None
+            or token is None
+            or method.upper() not in _RETRIABLE_METHODS
+        ):
             raise
         fresh = reauth(token)
         return _attempt(
@@ -209,7 +217,7 @@ def _send(
 def _attempt(
     url: str,
     *,
-    token: str,
+    token: str | None,
     method: str,
     body: bytes | None,
     content_type: str | None,
@@ -218,7 +226,9 @@ def _attempt(
     import urllib.error
     import urllib.request
 
-    headers = {"Authorization": f"Bearer {token}", **client_headers()}
+    headers = dict(client_headers())
+    if token is not None:
+        headers["Authorization"] = f"Bearer {token}"
     if content_type is not None:
         headers["Content-Type"] = content_type
 
@@ -235,7 +245,14 @@ def _attempt(
         # part-way through reading the response is neither -- it arrives raw
         # from the socket, and catching only those two lets it out as an
         # unhandled traceback under exit 1 instead of a reachability failure.
-        raise UnreachableError("Could not reach the server.") from exc
+        #
+        # A timeout is kept apart from the rest: it means the server took the
+        # request and then ran out of clock, which for a route that does its own
+        # work upstream is a different fault from never having been reached --
+        # and a different thing to tell the user. A read timeout arrives as a
+        # bare TimeoutError, a connect timeout as URLError wrapping one; a DNS
+        # failure or a refused connection is neither.
+        raise UnreachableError(TIMED_OUT if _timed_out(exc) else UNREACHABLE) from exc
 
     if not raw:
         return None
@@ -245,16 +262,42 @@ def _attempt(
         raise ApiError(UNEXPECTED_RESPONSE) from exc
 
 
+def _timed_out(exc: OSError) -> bool:
+    """Whether the clock ran out, rather than the host being unreachable."""
+    return isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError)
+
+
+_DETAIL_KEYS = ("message", "error", "detail", "errors", "results")
+
+
 def _detail(exc: urllib.error.HTTPError) -> str | None:
-    """The server's own explanation, when it sends one worth showing."""
+    """The server's own explanation, when it sends one worth showing.
+
+    Deliberately tolerant about shape. A validation layer rarely answers with a
+    flat string: class-validator sends `message` as an array, several
+    frameworks nest it under `error`, and losing all of that leaves the CLI
+    printing a generic refusal for a request the server explained perfectly
+    well. Anything that cannot be reduced to text is still dropped rather than
+    guessed at.
+    """
     try:
         payload = json.loads(exc.read())
     except (OSError, ValueError):
         return None
-    if not isinstance(payload, dict):
+    return _readable(payload)
+
+
+def _readable(payload: Any, depth: int = 0) -> str | None:
+    """Text out of whatever the error body turned out to be."""
+    if isinstance(payload, str):
+        return payload.strip() or None
+    if depth > 3:
         return None
-    for key in ("message", "error", "detail"):
-        value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+    if isinstance(payload, list):
+        parts = [found for item in payload if (found := _readable(item, depth + 1))]
+        return "; ".join(parts) or None
+    if isinstance(payload, dict):
+        for key in _DETAIL_KEYS:
+            if key in payload and (found := _readable(payload[key], depth + 1)):
+                return found
     return None

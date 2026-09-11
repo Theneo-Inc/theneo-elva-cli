@@ -14,7 +14,8 @@ def run(
 ) -> subprocess.CompletedProcess[str]:
     import os
 
-    full = {**os.environ, "XDG_CONFIG_HOME": str(cwd / "xdgconfig")}
+    full = {k: v for k, v in os.environ.items() if not k.startswith("ELVA_")}
+    full["XDG_CONFIG_HOME"] = str(cwd / "xdgconfig")
     full.update(env or {})
     return subprocess.run(
         [sys.executable, "-m", "elva_cli", *args],

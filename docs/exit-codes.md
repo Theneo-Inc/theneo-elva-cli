@@ -9,7 +9,7 @@ meaning. Adding a new code is safe; changing an existing one is a breaking chang
 | `0` | `OK` | Succeeded. | continue |
 | `1` | `UNEXPECTED` | The CLI hit a fault it does not model. A crash file was written and its path printed. | treat as a bug; report it |
 | `2` | `USAGE` | Bad flags or arguments, or an answer was required with no terminal to ask on. | fix the invocation |
-| `3` | `AUTH` | Not authenticated, or the stored credentials no longer work. | re-authenticate, then retry |
+| `3` | `AUTH` | Not authenticated, the stored credentials no longer work, or the account is not allowed to do this. | re-authenticate, then retry — **unless** the code is `ELVA_FORBIDDEN` |
 | `4` | `VALIDATION` | **The input spec is invalid. The CLI worked correctly.** | fail the build; show the report |
 | `5` | `API` | The Elva API was unreachable or returned a server error. | safe to retry with backoff |
 | `130` | `INTERRUPTED` | Interrupted by Ctrl-C (`128 + SIGINT`). | no action |
@@ -32,11 +32,37 @@ case $? in
 esac
 ```
 
+## `3` is two different things
+
+Both are authorization failures, so both exit `3` — the numeric codes are a
+contract every command shares, and one route's permission check is not a reason
+to widen it. The **error code** separates them, because the remedy differs:
+
+| Code | Means | What fixes it |
+|---|---|---|
+| `ELVA_AUTH` | Not signed in, or the credentials expired. | `elva auth login`, or a fresh token |
+| `ELVA_FORBIDDEN` | Signed in fine, but this account may not do this. | someone grants the access; retrying never helps |
+
+`elva import postman` is the first command to raise the second: listing Postman
+collections needs any access to the workspace, importing one needs the editor
+role. A pipeline that retries on `3` should check which it got:
+
+```bash
+if ! err=$(elva import postman Billing 2>&1 >/dev/null); then
+  case "$err" in
+    *ELVA_FORBIDDEN*) echo "$err"; echo "ask an admin for editor access"; exit 1 ;;
+    *ELVA_AUTH*) elva auth login && elva import postman Billing ;;
+    *) echo "$err"; exit 1 ;;
+  esac
+fi
+```
+
 ## Retrying
 
 Only `5` is safe to retry unconditionally. `3` is retryable after
-re-authenticating. `2` and `4` will produce the same result every time — retrying
-is pointless. `1` may or may not be deterministic; treat it as a bug.
+re-authenticating, unless it came with `ELVA_FORBIDDEN`. `2` and `4` will produce
+the same result every time — retrying is pointless. `1` may or may not be
+deterministic; treat it as a bug.
 
 ## Error output
 
@@ -53,7 +79,7 @@ ELVA_AUTH: session expired
 - Where one exists, the next action to take.
 
 Codes currently defined: `ELVA_ERROR`, `ELVA_USAGE`, `ELVA_CONFIG`, `ELVA_AUTH`,
-`ELVA_VALIDATION`, `ELVA_API`, `ELVA_CRASH`, `ELVA_AMBIGUOUS_COLLECTION`.
+`ELVA_FORBIDDEN`, `ELVA_VALIDATION`, `ELVA_API`, `ELVA_CRASH`, `ELVA_AMBIGUOUS_COLLECTION`.
 
 `ELVA_AMBIGUOUS_COLLECTION` is a specialisation of `ELVA_USAGE` (exit `2`): a
 collection name matched more than one collection, so the reference was not enough

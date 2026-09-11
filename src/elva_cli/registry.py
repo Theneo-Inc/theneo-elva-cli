@@ -29,7 +29,7 @@ class LazyGroup(TyperGroup):
         "auth": Lazy("elva_cli.commands.auth", "Sign in and manage credentials."),
         "collection": Lazy("elva_cli.commands.collection", "Inspect collections in a workspace."),
         "config": Lazy("elva_cli.commands.config", "Inspect resolved configuration."),
-        "import": Lazy("elva_cli.commands.import_", "Import an API spec into a collection."),
+        "import": Lazy("elva_cli.commands.import_", "Import an API into a collection."),
         "mcp": Lazy("elva_cli.commands.mcp", "Manage MCP servers."),
         "whoami": Lazy("elva_cli.commands.whoami", "Show who you're signed in as."),
         "workspace": Lazy("elva_cli.commands.workspace", "Manage workspaces."),

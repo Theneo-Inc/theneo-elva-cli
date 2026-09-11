@@ -186,3 +186,129 @@ class TestRedirects:
     def test_an_ordinary_response_still_works(self) -> None:
         base, _thread, _ = self._serve(302, "/unused")
         assert send_json(f"{base}/plain", token="t", method="POST", payload={}) == {"ok": True}
+
+    def test_token_none_sends_no_authorization_header(self) -> None:
+        """Elva's public routes (e.g. /api/fetch-file) take no bearer token."""
+        base, _thread, leaked = self._serve(200, "/unused")
+        assert send_json(f"{base}/plain", token=None, method="POST", payload={}) == {"ok": True}
+        assert leaked == [""]
+
+
+class TestErrorDetailShapes:
+    """A validation layer rarely answers with a flat string, and losing its
+    explanation leaves the CLI printing a generic refusal for a request the
+    server explained perfectly well."""
+
+    @staticmethod
+    def _detail_of(payload: object) -> str | None:
+        import json as _json
+
+        from elva_cli.core.api import http
+
+        class FakeError:
+            def read(self) -> bytes:
+                return _json.dumps(payload).encode()
+
+        return http._detail(FakeError())  # type: ignore[arg-type]
+
+    def test_a_flat_message_still_works(self) -> None:
+        assert self._detail_of({"message": '"collectionIds" is required'}) == (
+            '"collectionIds" is required'
+        )
+
+    def test_a_class_validator_array_is_joined(self) -> None:
+        """NestJS sends `message` as an array of every failing constraint."""
+        got = self._detail_of(
+            {"statusCode": 400, "message": ["collectionIds should not be empty"], "error": "Bad"}
+        )
+        assert got == "collectionIds should not be empty"
+
+    def test_several_failures_are_all_kept(self) -> None:
+        got = self._detail_of({"message": ["first is wrong", "second is wrong"]})
+        assert got == "first is wrong; second is wrong"
+
+    def test_a_nested_error_object_is_unwrapped(self) -> None:
+        assert self._detail_of({"error": {"message": "Postman said no"}}) == "Postman said no"
+
+    def test_an_errors_array_of_objects_is_read(self) -> None:
+        got = self._detail_of({"errors": [{"message": "bad id"}, {"message": "bad key"}]})
+        assert got == "bad id; bad key"
+
+    def test_a_body_with_nothing_sayable_is_still_none(self) -> None:
+        """Better a generic refusal than a guess at which field meant what."""
+        assert self._detail_of({"statusCode": 400, "success": False}) is None
+
+    def test_a_non_object_body_is_none(self) -> None:
+        assert self._detail_of([1, 2, 3]) is None
+
+    def test_deep_nesting_gives_up_rather_than_recursing_forever(self) -> None:
+        deep: object = {"message": "found me"}
+        for _ in range(6):
+            deep = {"error": deep}
+        assert self._detail_of(deep) is None
+
+
+class TestTimeoutsAreNotReachabilityFailures:
+    """A server that took the request and then ran out of clock is a different
+    fault from one that was never reached, and callers branch on the
+    difference: `spec.fetch` reframes a timeout as the spec's host being slow,
+    but must leave an unreachable Elva alone so it keeps exit 5 and the retry
+    signal that goes with it.
+    """
+
+    def test_a_stalled_response_is_a_timeout(self) -> None:
+        import socket
+        import time
+
+        from elva_cli.core.api.http import TIMED_OUT
+
+        server = socket.socket()
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+
+        def serve() -> None:
+            conn, _ = server.accept()
+            conn.recv(65536)
+            time.sleep(2)  # accept the request, then never answer
+            conn.close()
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        try:
+            with pytest.raises(ApiError) as caught:
+                send_json(
+                    f"http://127.0.0.1:{port}/x",
+                    token="t",
+                    method="POST",
+                    payload={},
+                    timeout=0.3,
+                )
+            assert str(caught.value) == TIMED_OUT
+        finally:
+            thread.join(timeout=5)
+            server.close()
+
+    def test_a_refused_connection_is_not_a_timeout(self) -> None:
+        """Nothing listening -- the closest stand-in for an unreachable Elva
+        that does not need the network."""
+        import socket
+
+        from elva_cli.core.api.http import UNREACHABLE
+
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+
+        with pytest.raises(ApiError) as caught:
+            send_json(f"http://127.0.0.1:{port}/x", token="t", method="POST", payload={})
+        assert str(caught.value) == UNREACHABLE
+
+    def test_a_dns_failure_is_not_a_timeout(self) -> None:
+        from elva_cli.core.api.http import UNREACHABLE
+
+        with pytest.raises(ApiError) as caught:
+            send_json("http://no-such-host.invalid/x", token="t", method="POST", payload={})
+        assert str(caught.value) == UNREACHABLE

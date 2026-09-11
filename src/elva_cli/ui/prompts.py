@@ -42,7 +42,8 @@ def text(
 
     import questionary
 
-    return str(questionary.text(prompt, default=default or "").unsafe_ask())
+    answer = questionary.text(prompt, default=default or "").unsafe_ask()
+    return "" if answer is None else str(answer)
 
 
 def select(
@@ -65,7 +66,10 @@ def select(
 
     import questionary
 
-    return str(questionary.select(prompt, choices=list(choices)).unsafe_ask())
+    answer = questionary.select(prompt, choices=list(choices)).unsafe_ask()
+    if answer is None:
+        raise UsageError(f"nothing was chosen for {flag}")
+    return str(answer)
 
 
 def confirm(
@@ -89,3 +93,36 @@ def confirm(
     import questionary
 
     return bool(questionary.confirm(prompt, default=default).unsafe_ask())
+
+
+def secret(
+    value: str | None,
+    *,
+    prompt: str,
+    source: str,
+    ctx: Ctx,
+) -> str:
+    """Ask for a credential, without echoing it and without a flag equivalent.
+
+    There is deliberately no `--...` to pass one of these on. argv is readable
+    by every process on the machine and lands in shell history, so a secret on
+    a command line outlives the command. `source` names the environment
+    variable to set instead when there is nobody to ask.
+
+    An answer of None is end-of-input rather than an empty key, and the caller
+    should not be handed the string "None".
+    """
+    if value is not None:
+        return value
+    if not ctx.interactive:
+        raise UsageError(
+            f"{source} is required when there is no terminal to prompt on",
+            hint=f"Set {source}, or pipe the value in on stdin. Never pass it as a flag.",
+        )
+
+    import questionary
+
+    answer = questionary.password(prompt).unsafe_ask()
+    if answer is None:
+        raise UsageError(f"no value was entered for {source}")
+    return str(answer)

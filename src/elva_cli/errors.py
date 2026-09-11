@@ -75,6 +75,22 @@ class AuthError(ElvaError):
     default_hint = "Run 'elva auth login' to sign in."
 
 
+class ForbiddenError(AuthError):
+    """Authenticated fine, but not allowed to do this.
+
+    Exits 3 like any other authorization failure: the numeric codes are a
+    public contract shared by every command, and one route's permission check
+    is not a reason to widen it here and nowhere else.
+
+    It carries its own code because the remedy is different. A plain ELVA_AUTH
+    is fixed by signing in again; no amount of signing in grants a role, so a
+    pipeline that retries on ELVA_AUTH should stop on this one.
+    """
+
+    code = "ELVA_FORBIDDEN"
+    default_hint = "Ask a workspace admin for the access this needs."
+
+
 class ValidationError(ElvaError):
     """The input spec is invalid. The CLI itself worked correctly."""
 
