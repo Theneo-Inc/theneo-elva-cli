@@ -53,6 +53,20 @@ class TestDryRunSkipsTheConfirmationGate:
         assert result.returncode == ExitCode.AUTH
 
 
+class TestDraftSkipsTheConfirmationGate:
+    def test_draft_unattended_reaches_the_auth_check_instead_of_usage(self, run: Run) -> None:
+        """A draft isn't publicly reachable, so --draft gets the same pass
+        through the confirmation gate as --dry-run does."""
+        result = run("--collection", "petstore", "mcp", "create", "--name", "x", "--draft")
+        assert result.returncode == ExitCode.AUTH
+
+    def test_dry_run_combined_with_draft_is_usage(self, run: Run) -> None:
+        result = run("mcp", "create", "--name", "x", "--dry-run", "--draft")
+        assert result.returncode == ExitCode.USAGE
+        assert "--dry-run" in result.stderr
+        assert "--draft" in result.stderr
+
+
 class TestErrorsGoToStderr:
     def test_json_mode_keeps_stdout_clean_on_failure(self, run: Run) -> None:
         result = run(

@@ -350,6 +350,76 @@ class TestCreateMcp:
         with pytest.raises(ApiError):
             service.create_mcp(base_url=BASE_URL, workspace=None, collection="Petstore", body={})
 
+    def test_draft_true_sends_draft_in_the_payload(
+        self, monkeypatch: pytest.MonkeyPatch, resolved: None
+    ) -> None:
+        seen = responder(
+            monkeypatch,
+            {
+                "deploymentId": "acme/my-api",
+                "mcpSlug": "my-api",
+                "apiName": "My API",
+                "toolCount": 3,
+                "runtimeUrl": None,
+                "authConfig": {"type": "none"},
+                "status": "draft",
+            },
+        )
+        result = service.create_mcp(
+            base_url=BASE_URL,
+            workspace=None,
+            collection="Petstore",
+            body={"mcpName": "My API"},
+            draft=True,
+        )
+        assert result.status == "draft"
+        assert seen[0]["payload"]["draft"] is True
+
+    def test_draft_false_omits_draft_from_the_payload(
+        self, monkeypatch: pytest.MonkeyPatch, resolved: None
+    ) -> None:
+        seen = responder(
+            monkeypatch,
+            {
+                "deploymentId": "acme/my-api",
+                "mcpSlug": "my-api",
+                "apiName": "My API",
+                "toolCount": 3,
+                "runtimeUrl": "https://runtime.getelva.ai",
+                "authConfig": {"type": "none"},
+            },
+        )
+        service.create_mcp(
+            base_url=BASE_URL, workspace=None, collection="Petstore", body={"mcpName": "My API"}
+        )
+        assert "draft" not in seen[0]["payload"]
+
+    def test_a_stray_draft_key_in_the_body_is_stripped_and_replaced_by_the_flag(
+        self, monkeypatch: pytest.MonkeyPatch, resolved: None
+    ) -> None:
+        """A --from file could set `draft` in its JSON, but only the
+        --draft flag is allowed to decide this -- same reasoning as
+        `dryRun`."""
+        seen = responder(
+            monkeypatch,
+            {
+                "deploymentId": "acme/my-api",
+                "mcpSlug": "my-api",
+                "apiName": "My API",
+                "toolCount": 3,
+                "runtimeUrl": "https://runtime.getelva.ai",
+                "authConfig": {"type": "none"},
+            },
+        )
+        service.create_mcp(
+            base_url=BASE_URL,
+            workspace=None,
+            collection="Petstore",
+            body={"mcpName": "My API", "draft": True},
+            draft=False,
+        )
+        assert "draft" not in seen[0]["payload"]
+
 
 class TestDryRunMcp:
     def test_sends_dry_run_true_and_maps_the_operations(
