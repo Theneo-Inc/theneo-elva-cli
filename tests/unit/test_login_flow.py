@@ -186,6 +186,23 @@ class TestFullFlowAgainstARealListener:
         assert outcome["result"] == LoginResult(email="person@example.com")
         assert saved == [body]
 
+    def test_callback_serves_the_signed_in_page(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(auth_service, "save_login", lambda _payload: None)
+        body = {"user": {"email": "person@example.com"}, "tokens": {"access": {}, "refresh": {}}}
+        monkeypatch.setattr(auth_service, "_exchange_token", lambda *_a, **_kw: body)
+
+        thread, _, captured, _outcome = self._run_in_background(monkeypatch)
+        redirect_uri, state = self._redirect_and_state(captured)
+
+        stray_url = f"{redirect_uri.rsplit('/', 1)[0]}/favicon.ico"
+        stray = urllib.request.urlopen(stray_url, timeout=5).read()
+        callback_url = f"{redirect_uri}?state={state}&code=the-code"
+        page = urllib.request.urlopen(callback_url, timeout=5).read()
+        thread.join(timeout=5)
+
+        assert b"You're signed in to Elva" in page
+        assert b"You're signed in to Elva" not in stray
+
     def test_mismatched_state_is_rejected_without_exchanging(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

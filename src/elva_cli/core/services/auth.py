@@ -29,8 +29,102 @@ REGISTER_TIMEOUT_SECONDS = 1800.0
 _EXCHANGE_TIMEOUT_SECONDS = 10.0
 _STUCK_REQUEST_TIMEOUT_SECONDS = 10.0
 _VERIFIER_ALPHABET = string.ascii_letters + string.digits + "-._~"
-_SUCCESS_PAGE = b"<html><body>All set. You can close this tab.</body></html>"
-_DONE_PAGE = b"<html><body>You can close this tab and return to your terminal.</body></html>"
+_FAVICON_PNG_BASE64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAEuklEQVR4AcSXW0wcVRjH/wydZROWRKQ8UGh4ABKg"
+    "ShY3XJqIEZM2Rdtq0jSgPBi1pawhqQ/QoKRIaqNSX4gpEQXqJaGhTUB5KaatISaacAl2I1SCxBhpeAAq1BSBZYD1"
+    "/E88ZBiY3dmXdru/ft935rv8z9nZCxrEIxQKaS0tLWfKysruFBcXrxUUFISipbCwMGRHUVFRiIiea16v9052dnaV"
+    "GCtnaxxeU1PTVV9f39bf3+8dHBzUR0ZGEC3Dw8OwY2hoCET01AOBgHdycvJzIaBLoGm1tbWnOjo6KlZXV0X8aJ5i"
+    "0xxUIf47rfX29vqDwaDwH8uzWpuZmTnwWEaLoTExMQc0wzB04Uf1FIWwI5pGoocu70SnRaIAmqZhz549ktjYWJjh"
+    "NcI8OHxoDvO2dhwfH4+UlBQkJiZC13UpgIKUECXAqQjHAiiUzT0eDxoaGnH27Dm89WYdXq2ow7FjdTh86BwqX/sK"
+    "brdHimW+ExwL4I5IYmIyxsZ+R0tLM75o/xhdV5vR19eMW7c/wcLCXzCMFSdzpUj2cySAiYqCgqPo6rqCxcVFrK+v"
+    "Y2NjA5ubm0hKysT8/BT+f4+HFcFeTKCNSoCuxyG4GoeHDx/IoRzMRsSX9wrGxr+TAuxEcCBhvrIRBahE2tzcFzE8"
+    "cmPHEJfuRrxLFyeyIo+W9wrziRpm50cUwAaq4b4UL+7d+2VLAJuSYu9R/DpxQw53u91ISEhAXFycjHmdPYjyaRUa"
+    "HV60g9fJ3r0ZuH//Dzlc5fKoiUvs/qDvEF4/WQv/G+/io6bLUoQSznz22M2GPQEWKfKePiFe42/lrsyNKODWT1fx"
+    "Tc8lfHntEmYX/sTEVEC8HOtMk7AHHbOlT8IKYJEic38eDj97CieP1CI/9/ktIeo6m/mr3sHc/Czar7RiaWlp22nx"
+    "OnNpifIjCuAOydfdp3H75w7MLU4BMRtSAI+YeOI9OP/eRQz8eBM/DHwvPgsM+fZkHcTDPFCE8sk1EvYeYAPCt1tw"
+    "bQXBtWU8levD+OSgbMLhqalpON9wAW3tn+K3iXE5mJ8NrGMSh1gt1wjXI54AkwgbPvlEMv75dxYh8Y/D8/OfQXXV"
+    "2/jgw0bMzc3u+GxgHVHDaAnXCH3HApj80pETuDnQI78Rjx9/GSUlJbhw8X0sLy/LnfOkKJTNCWtoidVnTMIKYALh"
+    "bvltl7IvGYsP/obf7xdfx7Fobb0sd203lIPNsJc5pr9DAJMUTFB+cdFBjE8E0NjYCP747Ovrk3e5edcql3UKrimf"
+    "lrGZrZtQLTJpN9L2p6H0hefQ2dmJ0dHRXY9c1Vl7MVbXrFaeQLgEFvCIr1+/BvELGtPT09uOnbXhYD1ROfQJY1p5"
+    "Agzs4HDCo1YwZjGxqzOvM0+h1hnTlwIY7AYTCAcSClB5XI8GVWe1mmhq2DVisvXabmvWHL5riHWdtWbEb0mD98Bd"
+    "8yJ9a6FdbB3CmKh8+lbUNdqkpKS7fAnaGJgJJ4INmaus8s0x1yLhcrng8/k+4x8m7SK5WyC/YKK11sGMI8HhpaWl"
+    "3Tk5OR18CTYNw6hMTU09k56eHsjIyDAyMzPhFJG/LZcxUfW0jElWVpYh/jwPlJeXV/f09FQ2NTVt/gcAAP//9u3d"
+    "PgAAAAZJREFUAwA1UAUkXF9d2QAAAABJRU5ErkJggg=="
+)
+_CALLBACK_PAGE = string.Template("""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>$title</title>
+<link rel="icon" type="image/png" href="data:image/png;base64,$favicon">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap">
+<style>
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: #080808;
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+      "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page {
+    position: relative; display: flex; align-items: center; justify-content: center;
+    min-height: 100vh; padding: 25px; box-sizing: border-box; overflow: hidden;
+  }
+  .page > svg { position: absolute; top: 0; left: 0; width: 100%; height: auto; }
+  .message { position: relative; z-index: 1; text-align: center; }
+  h1 { margin: 0 0 10px; font-size: 24px; line-height: 36px; font-weight: 600; color: #FFFFFF; }
+  p { margin: 0; font-size: 16px; line-height: 24px; color: rgba(255, 255, 255, 0.6); }
+</style>
+</head>
+<body>
+<main class="page">
+  <svg viewBox="0 0 1817 432" fill="none" aria-hidden="true">
+    <defs>
+      <filter id="blur" x="-100%" y="-100%" width="300%" height="300%">
+        <feGaussianBlur stdDeviation="50"/>
+      </filter>
+      <linearGradient id="beam" x1="0" y1="0" x2="0" y2="1">
+        <stop stop-color="#8669DC" stop-opacity="0.4"/>
+        <stop offset="1" stop-color="#8669DC" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    <g fill="url(#beam)">
+      <rect filter="url(#blur)" fill-opacity="0.8" x="741.068" y="-271.24" width="251"
+            height="577"/>
+      <rect filter="url(#blur)" fill-opacity="0.8" x="500.867" y="-294.009" width="251" height="577"
+            transform="rotate(15.1572 500.867 -294.009)"/>
+      <rect filter="url(#blur)" fill-opacity="0.8" x="250.867" y="-354" width="251" height="577"
+            transform="rotate(15.1572 250.867 -354)"/>
+      <rect filter="url(#blur)" fill-opacity="0.8" x="1006.48" y="-207.562" width="251" height="577"
+            transform="rotate(-20.8806 1006.48 -207.562)"/>
+      <rect filter="url(#blur)" x="1276.48" y="-207.555" width="251" height="577"
+            transform="rotate(-20.8806 1276.48 -207.555)"/>
+    </g>
+  </svg>
+  <div class="message">
+    <h1>$heading</h1>
+    <p>$message</p>
+  </div>
+</main>
+</body>
+</html>
+""")
+_SUCCESS_PAGE = _CALLBACK_PAGE.substitute(
+    favicon=_FAVICON_PNG_BASE64,
+    title="Signed in - Elva",
+    heading="You're signed in to Elva",
+    message="Your terminal has what it needs. "
+    "You can close this tab and carry on where you left off.",
+).encode("utf-8")
+_DONE_PAGE = _CALLBACK_PAGE.substitute(
+    favicon=_FAVICON_PNG_BASE64,
+    title="Elva",
+    heading="You can close this tab",
+    message="Return to your terminal to continue.",
+).encode("utf-8")
 
 
 @dataclass(frozen=True)
