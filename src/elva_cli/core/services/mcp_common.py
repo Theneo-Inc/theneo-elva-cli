@@ -6,9 +6,23 @@ since only the shared branches are here.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from elva_cli.errors import UsageError
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+
+def reauth_for(base_url: str) -> Callable[[str], str]:
+    """The `reauth` callback every service passes to `get_json`/`send_json`:
+    force a refresh of a token that looked valid but got a 401 anyway."""
+    from elva_cli.auth import refresh_now
+
+    def reauth(stale: str) -> str:
+        return refresh_now(base_url=base_url, stale_access_token=stale)
+
+    return reauth
 
 
 def as_int(value: Any) -> int:

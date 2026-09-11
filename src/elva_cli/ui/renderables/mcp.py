@@ -4,7 +4,7 @@ from rich.table import Table  # noqa: TC002
 from rich.text import Text
 
 from elva_cli.core.services.mcp_result import McpListResult, McpShowResult  # noqa: TC001
-from elva_cli.ui.renderables.base import aligned_rows, render, table
+from elva_cli.ui.renderables.base import aligned_rows, render, secret_note, table
 
 
 @render.register
@@ -32,10 +32,6 @@ def _(result: McpShowResult) -> Text:
     status_note = (
         Text("not serving traffic", style="elva.warn") if s.status == "draft" else Text("")
     )
-    if s.has_secret is None:
-        secret_note = Text("n/a")
-    else:
-        secret_note = Text("set") if s.has_secret else Text("not set")
     rows = [
         ("Slug", Text(s.slug), Text("")),
         ("Name", Text(s.name), Text("")),
@@ -43,7 +39,7 @@ def _(result: McpShowResult) -> Text:
         ("Deployment", Text(s.deployment_id or ""), Text("")),
         ("Version", Text(s.version or ""), Text("")),
         ("Auth type", Text(s.auth_type or ""), Text("")),
-        ("Secret", secret_note, Text("")),
+        ("Secret", secret_note(s.has_secret), Text("")),
         ("Operations", Text(str(len(s.selected_operations or ()))), Text("")),
         ("Collection", Text(s.collection_name or s.collection_id or ""), Text("")),
         ("URL", Text(s.runtime_url or "", style="elva.accent"), Text("")),
