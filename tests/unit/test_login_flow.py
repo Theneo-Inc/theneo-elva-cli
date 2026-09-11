@@ -173,7 +173,7 @@ class TestFullFlowAgainstARealListener:
         saved: list[dict[str, object]] = []
         monkeypatch.setattr(auth_service, "save_login", saved.append)
         body = {"user": {"email": "person@example.com"}, "tokens": {"access": {}, "refresh": {}}}
-        monkeypatch.setattr(auth_service, "_exchange_token", lambda base_url, code, verifier: body)
+        monkeypatch.setattr(auth_service, "_exchange_token", lambda *_a, **_kw: body)
 
         thread, _, captured, outcome = self._run_in_background(monkeypatch)
         redirect_uri, state = self._redirect_and_state(captured)
@@ -241,7 +241,7 @@ class TestFullFlowAgainstARealListener:
     ) -> None:
         monkeypatch.setattr(auth_service, "save_login", lambda _payload: None)
         body = {"user": {"email": "person@example.com"}, "tokens": {"access": {}, "refresh": {}}}
-        monkeypatch.setattr(auth_service, "_exchange_token", lambda *_a: body)
+        monkeypatch.setattr(auth_service, "_exchange_token", lambda *_a, **_kw: body)
 
         thread, _, captured, outcome = self._run_in_background(monkeypatch)
         redirect_uri, state = self._redirect_and_state(captured)
@@ -259,7 +259,7 @@ class TestFullFlowAgainstARealListener:
     ) -> None:
         monkeypatch.setattr(auth_service, "save_login", lambda _payload: None)
         monkeypatch.setattr(
-            auth_service, "_exchange_token", lambda *_a: {"user": "nope", "tokens": {}}
+            auth_service, "_exchange_token", lambda *_a, **_kw: {"user": "nope", "tokens": {}}
         )
 
         thread, _, captured, outcome = self._run_in_background(monkeypatch)
@@ -277,7 +277,7 @@ class TestFullFlowAgainstARealListener:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         body = {"user": {"email": "person@example.com"}, "tokens": {"access": {}, "refresh": {}}}
-        monkeypatch.setattr(auth_service, "_exchange_token", lambda *_a: body)
+        monkeypatch.setattr(auth_service, "_exchange_token", lambda *_a, **_kw: body)
 
         def unwritable(_payload: object) -> None:
             raise OSError("Read-only file system")
