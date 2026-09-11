@@ -246,3 +246,69 @@ class TestErrorDetailShapes:
         for _ in range(6):
             deep = {"error": deep}
         assert self._detail_of(deep) is None
+
+
+class TestTimeoutsAreNotReachabilityFailures:
+    """A server that took the request and then ran out of clock is a different
+    fault from one that was never reached, and callers branch on the
+    difference: `spec.fetch` reframes a timeout as the spec's host being slow,
+    but must leave an unreachable Elva alone so it keeps exit 5 and the retry
+    signal that goes with it.
+    """
+
+    def test_a_stalled_response_is_a_timeout(self) -> None:
+        import socket
+        import time
+
+        from elva_cli.core.api.http import TIMED_OUT
+
+        server = socket.socket()
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        server.bind(("127.0.0.1", 0))
+        server.listen(1)
+        port = server.getsockname()[1]
+
+        def serve() -> None:
+            conn, _ = server.accept()
+            conn.recv(65536)
+            time.sleep(2)  # accept the request, then never answer
+            conn.close()
+
+        thread = threading.Thread(target=serve, daemon=True)
+        thread.start()
+        try:
+            with pytest.raises(ApiError) as caught:
+                send_json(
+                    f"http://127.0.0.1:{port}/x",
+                    token="t",
+                    method="POST",
+                    payload={},
+                    timeout=0.3,
+                )
+            assert str(caught.value) == TIMED_OUT
+        finally:
+            thread.join(timeout=5)
+            server.close()
+
+    def test_a_refused_connection_is_not_a_timeout(self) -> None:
+        """Nothing listening -- the closest stand-in for an unreachable Elva
+        that does not need the network."""
+        import socket
+
+        from elva_cli.core.api.http import UNREACHABLE
+
+        probe = socket.socket()
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+        probe.close()
+
+        with pytest.raises(ApiError) as caught:
+            send_json(f"http://127.0.0.1:{port}/x", token="t", method="POST", payload={})
+        assert str(caught.value) == UNREACHABLE
+
+    def test_a_dns_failure_is_not_a_timeout(self) -> None:
+        from elva_cli.core.api.http import UNREACHABLE
+
+        with pytest.raises(ApiError) as caught:
+            send_json("http://no-such-host.invalid/x", token="t", method="POST", payload={})
+        assert str(caught.value) == UNREACHABLE

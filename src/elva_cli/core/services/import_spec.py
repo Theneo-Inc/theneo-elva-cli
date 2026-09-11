@@ -33,6 +33,7 @@ _URL_FETCH_TIMEOUT = 30.0
 MAX_BYTES = 10 * 1024 * 1024
 MAX_NAME = 100
 EXTENSIONS = (".json", ".yaml", ".yml")
+_YAML_SUFFIXES = (".yaml", ".yml")
 _FIELD = "spec"
 
 _STDIN_SOURCE = "<stdin>"
@@ -63,8 +64,9 @@ def import_spec(
     dry_run: bool = False,
 ) -> ImportSpecResult | DryRunResult:
     """Create a collection from a spec, or update one with --update."""
-    source, data = _read_source(path=path, stdin=stdin, spec_url=spec_url, base_url=base_url)
-    resolved, meta = _inspect(data, spec_format, source)
+    source, raw = _read_source(path=path, stdin=stdin, spec_url=spec_url, base_url=base_url)
+    resolved, meta = _inspect(raw, spec_format, source)
+    data = _converted(raw, source)
     action = Action.UPDATED if update else Action.CREATED
     target_name = _target_name(
         update=update, collection=collection, name=name, meta=meta, prompt=prompt_for_name
@@ -131,11 +133,15 @@ def import_spec(
 def _read_source(
     *, path: Path | None, stdin: bytes | None, spec_url: str | None, base_url: str
 ) -> tuple[str, bytes]:
-    """The spec's display name and its bytes.
+    """The spec's display name and its bytes, exactly as they arrived.
 
     A URL is fetched through Elva's proxy -- the same path the web app uses --
-    so the bytes come back here to be converted and named like a local file,
+    so the bytes come back here to be inspected and named like a local file,
     rather than the server being handed a link.
+
+    Nothing is converted here. `_inspect` has to see the document the user
+    actually has, and the size limit has to report a number they can check
+    against their own file; `_converted` runs after both.
     """
     given = [given for given in (path, stdin, spec_url) if given is not None]
     if len(given) != 1:
@@ -151,10 +157,10 @@ def _read_source(
             fetched = fetch_spec(base_url=base_url, url=spec_url, timeout=_URL_FETCH_TIMEOUT)
         except SpecFetchError as exc:
             raise UsageError(str(exc)) from exc
-        return spec_url, _checked(to_yaml(fetched), spec_url)
+        return spec_url, _checked(fetched, spec_url)
 
     if stdin is not None:
-        return _STDIN_SOURCE, _checked(to_yaml(stdin), _STDIN_SOURCE)
+        return _STDIN_SOURCE, _checked(stdin, _STDIN_SOURCE)
 
     assert path is not None
     if path.is_dir():
@@ -176,15 +182,46 @@ def _read_source(
         ) from exc
     except OSError as exc:
         raise UsageError(f"cannot read {path}: {exc}") from exc
-    return path.name, _checked(to_yaml(data), path.name)
+    return path.name, _checked(data, path.name)
 
 
 def _checked(data: bytes, source: str) -> bytes:
+    """The source as it stands, measured before anything rewrites it, so the
+    size in the error is one the user can check against their own file."""
     if not data.strip():
         raise UsageError(f"{source} is empty")
     if len(data) > MAX_BYTES:
-        raise UsageError(f"{source} is {len(data) / 1024 / 1024:.1f} MB; the limit is 10 MB")
+        raise UsageError(f"{source} is {_mb(data)}; the limit is 10 MB")
     return data
+
+
+def _converted(raw: bytes, source: str) -> bytes:
+    """The bytes that actually go up: a JSON spec re-serialised as YAML.
+
+    This runs after `_inspect`, never before. `detect_format` only sniffs the
+    first `SNIFF_BYTES`, and YAML expands a minified JSON document by roughly a
+    fifth -- enough to push `openapi:` or `_postman_id` past that window for a
+    document only a few KB long. Converting first made a valid 6.7 KB spec
+    report "could not tell whether ... is an OpenAPI document or a Postman
+    collection", and hid a 7.4 KB Postman collection from the refusal that
+    exists to stop it being uploaded as a spec.
+
+    The limit is checked again here because the conversion can cross it on its
+    own, and the message names both numbers -- the one on disk does not explain
+    the failure by itself.
+    """
+    data = to_yaml(raw)
+    if len(data) > MAX_BYTES:
+        raise UsageError(
+            f"{source} is {_mb(raw)} as it stands, but {_mb(data)} once converted to "
+            f"YAML for upload; the limit is 10 MB",
+            hint="Elva stores specs as YAML, the same as the web app does.",
+        )
+    return data
+
+
+def _mb(data: bytes) -> str:
+    return f"{len(data) / 1024 / 1024:.1f} MB"
 
 
 def _inspect(data: bytes, requested: str | None, source: str) -> tuple[SpecFormat, SpecMeta]:
@@ -354,17 +391,30 @@ def _update(
 
 
 def _upload_name(source: str, data: bytes) -> str:
-    """A filename for the multipart part.
+    """A filename for the multipart part, with an extension matching the bytes.
 
     The route's fileFilter accepts on media type and only falls back to the
     extension when that type is generic (octet-stream, text/plain, empty).
-    _content_type always sends a specific one, so this name is never what
-    decides acceptance. A local file keeps its own name; stdin and a URL get
-    one whose extension matches the bytes actually going up.
+    _content_type always sends a specific one, so this name never decides
+    acceptance -- but a JSON spec goes up as YAML, so `payments.json` would
+    name a file that is not JSON for anything downstream reading the extension
+    instead of the body.
+
+    A local name is kept otherwise: only the extension is corrected, and only
+    when it disagrees with what is actually being sent. `.yml` already agrees.
     """
-    if source != _STDIN_SOURCE and "://" not in source:
+    json_bytes = data.lstrip()[:1] in (b"{", b"[")
+    if source == _STDIN_SOURCE or "://" in source:
+        return "spec.json" if json_bytes else "spec.yaml"
+
+    import pathlib
+
+    name = pathlib.PurePosixPath(source)
+    wanted = ".json" if json_bytes else ".yaml"
+    suffix = name.suffix.lower()
+    if suffix == wanted or (not json_bytes and suffix in _YAML_SUFFIXES):
         return source
-    return "spec.json" if data.lstrip()[:1] in (b"{", b"[") else "spec.yaml"
+    return name.with_suffix(wanted).name
 
 
 def _content_type(data: bytes) -> str:

@@ -1083,3 +1083,174 @@ class TestDetailExtractionReadsResults:
         assert http._detail(FakeHTTPError()) == (  # type: ignore[arg-type]
             'A collection named "Elva Test Collection" already exists'
         )
+
+
+class TestEveryServerMessageIsScrubbedNotJustSome:
+    """Redaction used to be opt-in at each use of `error.detail`, and the
+    conflict branch -- `_named_conflict(...) or _collection_conflict(...)`, both
+    of which return the server's text verbatim -- did not opt in. The key is
+    unlikely to be in a name-clash message today, but `http._detail` now reads
+    `errors` and `results` three levels deep, so there is more server text
+    reaching the user across every branch, and the next branch added here would
+    have inherited the same gap. `_scrubbed` now cleans the HttpError at the
+    two request helpers, so no branch has to remember.
+    """
+
+    def test_a_conflict_message_that_echoes_the_key_is_scrubbed(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None
+    ) -> None:
+        detail = f'A collection named "Billing" already exists (key {KEY})'
+        calls(monkeypatch, LISTED, HttpError(400, detail))
+        with pytest.raises(UsageError) as caught:
+            service.import_postman(base_url=BASE_URL, api_key=KEY, collection="Billing")
+        assert KEY not in str(caught.value)
+        assert "***" in str(caught.value)
+        assert caught.value.exit_code == ExitCode.USAGE
+
+    def test_a_by_id_conflict_message_that_echoes_the_key_is_scrubbed(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None
+    ) -> None:
+        detail = f"collection already exists; apiKey={KEY}"
+        calls(monkeypatch, HttpError(400, detail))
+        with pytest.raises(UsageError) as caught:
+            service.import_postman(base_url=BASE_URL, api_key=KEY, collection=BILLING["uid"])
+        assert KEY not in str(caught.value)
+
+    def test_a_validation_message_that_echoes_the_key_is_scrubbed(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None
+    ) -> None:
+        calls(monkeypatch, LISTED, HttpError(422, f"apiKey {KEY} is malformed"))
+        with pytest.raises(ValidationError) as caught:
+            service.import_postman(base_url=BASE_URL, api_key=KEY, collection="Billing")
+        assert KEY not in str(caught.value)
+
+    def test_a_failed_results_entry_that_echoes_the_key_is_scrubbed(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None
+    ) -> None:
+        """A rejection inside a 200 body never went through an HttpError at
+        all, so it missed redaction even harder than the conflict branch did."""
+        calls(monkeypatch, _results_failed(f"Postman refused the key {KEY}"))
+        with pytest.raises(ValidationError) as caught:
+            service.import_postman(base_url=BASE_URL, api_key=KEY, collection=BILLING["uid"])
+        assert KEY not in str(caught.value)
+        assert "***" in str(caught.value)
+
+
+class TestAnUnknownStatusIsNotAFailure:
+    """`status != "imported"` was read as a rejection. The route's vocabulary
+    is an assumption -- "imported" is the only value this has actually seen --
+    so a backend answering "success" or "queued" made the CLI report exit 4 for
+    an import that happened, which a user answers by running it again into a
+    duplicate."""
+
+    @staticmethod
+    def _entry(status: str) -> dict[str, Any]:
+        """A result entry with a status and nothing else to read: no nested
+        collection, no error. The shape the guess was about."""
+        return {"results": [{"postmanCollectionId": PAYMENTS["uid"], "status": status}]}
+
+    @pytest.mark.parametrize("status", ["success", "ok", "created", "queued", "complete"])
+    def test_an_unrecognised_status_falls_through_to_the_lookup(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None, status: str
+    ) -> None:
+        found = {"collections": [{"id": CREATED_ID, "name": "Payments Platform API"}]}
+        calls(monkeypatch, LISTED, self._entry(status))
+        monkeypatch.setattr(service, "get_json", lambda *a, **k: found)
+        result = service.import_postman(
+            base_url=BASE_URL, api_key=KEY, collection="Payments Platform API"
+        )
+        assert result.collection_id == CREATED_ID
+
+    @pytest.mark.parametrize("status", ["failed", "error", "rejected", "skipped"])
+    def test_an_explicit_failure_is_still_a_failure(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None, status: str
+    ) -> None:
+        calls(monkeypatch, LISTED, self._entry(status))
+        with pytest.raises(ValidationError, match="did not complete"):
+            service.import_postman(
+                base_url=BASE_URL, api_key=KEY, collection="Payments Platform API"
+            )
+
+    def test_a_failure_with_a_reason_still_reports_the_reason(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None
+    ) -> None:
+        """The `error` string is read before `status`, and still is."""
+        calls(monkeypatch, LISTED, _results_failed("Postman rate limit exceeded"))
+        with pytest.raises(ValidationError, match="rate limit"):
+            service.import_postman(
+                base_url=BASE_URL, api_key=KEY, collection="Payments Platform API"
+            )
+
+
+class TestTheFallbackWillNotAdoptAnOlderNamesake:
+    """_look_up finds the new collection by name, but Elva does not stop two
+    collections sharing one. Import 'Billing' today after importing it last
+    week, get a reply _import_outcome cannot read, and the name match returns
+    the week-old collection -- whose id, endpoint count and link then get
+    reported as this import's result, with _settled polling the wrong
+    document."""
+
+    @staticmethod
+    def _listing(created_at: str | None) -> dict[str, Any]:
+        row: dict[str, Any] = {"id": CREATED_ID, "name": "Payments Platform API"}
+        if created_at is not None:
+            row["createdAt"] = created_at
+        return {"collections": [row]}
+
+    def test_a_collection_from_last_week_is_refused_rather_than_reported(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None
+    ) -> None:
+        calls(monkeypatch, LISTED, UNREADABLE)
+        monkeypatch.setattr(
+            service, "get_json", lambda *a, **k: self._listing("2026-08-14T09:12:00.000Z")
+        )
+        with pytest.raises(ApiError, match="already existed before") as caught:
+            service.import_postman(
+                base_url=BASE_URL, api_key=KEY, collection="Payments Platform API"
+            )
+        assert "before importing again" in (caught.value.hint or "")
+
+    def test_a_collection_created_just_now_is_still_accepted(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None
+    ) -> None:
+        import datetime
+
+        now = datetime.datetime.now(datetime.UTC).isoformat().replace("+00:00", "Z")
+        calls(monkeypatch, LISTED, UNREADABLE)
+        monkeypatch.setattr(service, "get_json", lambda *a, **k: self._listing(now))
+        result = service.import_postman(
+            base_url=BASE_URL, api_key=KEY, collection="Payments Platform API"
+        )
+        assert result.collection_id == CREATED_ID
+
+    def test_a_server_clock_a_little_behind_is_not_treated_as_last_week(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None
+    ) -> None:
+        """The comparison is between two clocks, so it carries slack. Costing
+        a user a real result over a minute of skew would be the worse bug."""
+        import datetime
+
+        skewed = datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=2)
+        calls(monkeypatch, LISTED, UNREADABLE)
+        monkeypatch.setattr(
+            service,
+            "get_json",
+            lambda *a, **k: self._listing(skewed.isoformat().replace("+00:00", "Z")),
+        )
+        result = service.import_postman(
+            base_url=BASE_URL, api_key=KEY, collection="Payments Platform API"
+        )
+        assert result.collection_id == CREATED_ID
+
+    @pytest.mark.parametrize("stamp", [None, "not a date", ""])
+    def test_a_timestamp_this_cannot_read_does_not_block_the_import(
+        self, monkeypatch: pytest.MonkeyPatch, signed_in: None, stamp: str | None
+    ) -> None:
+        """No createdAt is how this behaved before the check existed. A parse
+        failure is not evidence the collection is old."""
+        calls(monkeypatch, LISTED, UNREADABLE)
+        monkeypatch.setattr(service, "get_json", lambda *a, **k: self._listing(stamp))
+        result = service.import_postman(
+            base_url=BASE_URL, api_key=KEY, collection="Payments Platform API"
+        )
+        assert result.collection_id == CREATED_ID

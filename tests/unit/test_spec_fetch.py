@@ -95,3 +95,80 @@ class TestToYaml:
 
     def test_unparseable_bytes_are_left_alone(self) -> None:
         assert to_yaml(b"not a spec at all") == b"not a spec at all"
+
+
+class TestOnlyTheUrlsOwnFaultsAreUsageErrors:
+    """Every non-413 status used to become a SpecFetchError, which the caller
+    rewraps as exit 2 with hint "Run 'elva --help'". exit-codes.md promises a
+    pipeline that 5 is "safe to retry with backoff" and 3 means
+    re-authenticate, so flattening Elva's own failures into 2 made a transient
+    outage a hard build failure with no route back."""
+
+    @pytest.mark.parametrize("status", [400, 404, 413, 422, 502, 504])
+    def test_a_fault_at_the_url_stays_a_spec_fetch_error(
+        self, monkeypatch: pytest.MonkeyPatch, status: int
+    ) -> None:
+        _send(monkeypatch, HttpError(status, "upstream said no"))
+        with pytest.raises(SpecFetchError):
+            fetch_spec(base_url=BASE_URL, url=URL, timeout=5)
+
+    @pytest.mark.parametrize("status", [500, 503])
+    def test_an_elva_server_error_is_retryable(
+        self, monkeypatch: pytest.MonkeyPatch, status: int
+    ) -> None:
+        """502/504 stay with the URL -- those are the proxy reporting that its
+        own upstream fetch failed -- but a bare 500 or 503 is Elva itself."""
+        from elva_cli.errors import ApiError
+
+        _send(monkeypatch, HttpError(status, None))
+        with pytest.raises(ApiError) as caught:
+            fetch_spec(base_url=BASE_URL, url=URL, timeout=5)
+        assert caught.value.exit_code.value == 5
+
+    @pytest.mark.parametrize("status", [401, 403])
+    def test_a_refused_session_asks_for_re_authentication(
+        self, monkeypatch: pytest.MonkeyPatch, status: int
+    ) -> None:
+        """The route takes no token today, but if that changes the answer is
+        'log in', not 'fix your command line'."""
+        from elva_cli.errors import AuthError
+
+        _send(monkeypatch, HttpError(status, None))
+        with pytest.raises(AuthError) as caught:
+            fetch_spec(base_url=BASE_URL, url=URL, timeout=5)
+        assert caught.value.exit_code.value == 3
+
+
+class TestTheFasterDumperEmitsTheSameDocument:
+    """to_yaml runs on every JSON import, --dry-run included, and the
+    pure-Python emitter is where the time goes. libyaml's is only worth using
+    if it is indistinguishable."""
+
+    def test_it_prefers_libyaml_when_the_wheel_has_it(self) -> None:
+        from elva_cli.core.spec.normalize import _base
+
+        assert _base().__name__ in ("CSafeDumper", "SafeDumper")
+
+    def test_both_dumpers_agree(self) -> None:
+        import json
+
+        from elva_cli.core.spec import normalize
+
+        doc = {
+            "openapi": "3.0.3",
+            "info": {"title": "Café ☕", "version": "2.1"},
+            "paths": {"/b": {"get": {"x": {"a": 1}}}, "/a": {"post": {"y": {"a": 1}}}},
+        }
+        raw = json.dumps(doc).encode()
+
+        if not hasattr(yaml, "CSafeDumper"):
+            pytest.skip("this wheel was not built with libyaml")
+
+        fast = normalize.to_yaml(raw)
+        monkey = pytest.MonkeyPatch()
+        try:
+            monkey.setattr(normalize, "_base", lambda: yaml.SafeDumper)
+            slow = normalize.to_yaml(raw)
+        finally:
+            monkey.undo()
+        assert fast == slow

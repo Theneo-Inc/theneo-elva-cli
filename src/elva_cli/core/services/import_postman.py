@@ -9,7 +9,9 @@ with Elva's own JWT:
 The Postman API key is somebody else's credential passing through. It never
 reaches argv (the command layer reads it from the environment, a hidden prompt
 or stdin), it is never stored, it is never logged, and it is stripped back out
-of any server message before that message is shown -- see `_redacted`. It is
+of any server message before that message is shown. That stripping happens once
+at the boundary -- `_scrubbed` cleans an `HttpError` the moment it leaves either
+request helper -- so no error mapping downstream has to remember to do it. It is
 also not sent over a cleartext connection at all; see `_refuse_plaintext`.
 
 A rejected key exits 3 rather than 4 or 1: it is a credential problem, and the
@@ -70,6 +72,10 @@ _KEY_HINT = (
 )
 _REDACTED = "***"
 
+# Slack for clock skew between this machine and Elva when deciding whether a
+# collection predates the import. See `_predates`.
+_CLOCK_SKEW = 300.0
+
 _LOOPBACK = frozenset({"localhost", "127.0.0.1", "::1"})
 
 _POSTMAN_ID = re.compile(
@@ -116,6 +122,9 @@ def import_postman(
         chosen = _choose(found, wanted=collection, choose=choose)
         postman_name = chosen.name
 
+    import time
+
+    started = time.time()
     body = _import(
         base_url=base_url,
         token=token,
@@ -125,10 +134,16 @@ def import_postman(
         key_proven=listed,
     )
 
-    doc = _import_outcome(body, chosen=chosen)
+    doc = _import_outcome(body, key=key)
     collection_id = find_id(doc) if doc is not None else None
     if doc is None or collection_id is None:
-        doc = _look_up(base_url=base_url, token=token, company_id=space.id, name=postman_name)
+        doc = _look_up(
+            base_url=base_url,
+            token=token,
+            company_id=space.id,
+            name=postman_name,
+            started=started,
+        )
         collection_id = require_id(doc, message=_UNEXPECTED_RESPONSE)
 
     doc = _settled(
@@ -227,7 +242,9 @@ def _fetch(
             timeout=_HTTP_TIMEOUT,
         )
     except HttpError as exc:
-        raise _postman_error(exc, key=key, action="Listing your Postman collections") from exc
+        raise _postman_error(
+            _scrubbed(exc, key), action="Listing your Postman collections"
+        ) from exc
     return tuple(_collection(row) for row in _rows(body))
 
 
@@ -342,7 +359,7 @@ def _import(
             timeout=_HTTP_TIMEOUT,
         )
     except HttpError as exc:
-        raise _import_error(exc, key=key, chosen=chosen, key_proven=key_proven) from exc
+        raise _import_error(_scrubbed(exc, key), chosen=chosen, key_proven=key_proven) from exc
     return body
 
 
@@ -380,7 +397,7 @@ def _first(rows: list[Any]) -> dict[str, Any] | None:
     return next((row for row in rows if isinstance(row, dict)), None)
 
 
-def _import_outcome(body: Any, *, chosen: PostmanCollection) -> dict[str, Any] | None:
+def _import_outcome(body: Any, *, key: str) -> dict[str, Any] | None:
     """The created collection out of the import route's reply.
 
     The route answers a batch: ``{"results": [{postmanCollectionId, status,
@@ -396,13 +413,22 @@ def _import_outcome(body: Any, *, chosen: PostmanCollection) -> dict[str, Any] |
         inner = entry.get("collection")
         if isinstance(inner, dict):
             return inner
-        reason = text(entry.get("error"))
+        reason = _redacted(text(entry.get("error")), key)
         if reason is not None:
             raise _import_rejected(reason)
         status = (text(entry.get("status")) or "").lower()
-        if status and status != "imported":
+        if status in _FAILED:
             raise _import_rejected(f"Postman import did not complete (status {status!r}).")
     return _document(body)
+
+
+# Anything not on this list falls through to `_document`/`_look_up` instead of
+# being called a failure. The route's vocabulary is an assumption -- "imported"
+# is the one value this has actually seen -- and reading "success", "ok" or
+# "queued" as a rejection would report a hard failure for an import that
+# happened, which a user answers by running it again into a duplicate. An
+# unknown status with no document is worth a lookup, not a refusal.
+_FAILED = frozenset({"failed", "error", "errored", "rejected", "skipped"})
 
 
 def _result_entry(body: Any) -> dict[str, Any] | None:
@@ -480,7 +506,9 @@ def _collection_conflict(detail: str | None) -> str | None:
     return None
 
 
-def _look_up(*, base_url: str, token: str, company_id: str, name: str | None) -> dict[str, Any]:
+def _look_up(
+    *, base_url: str, token: str, company_id: str, name: str | None, started: float
+) -> dict[str, Any]:
     """The collection the import just made, found by name instead of read out
     of the reply.
 
@@ -489,6 +517,12 @@ def _look_up(*, base_url: str, token: str, company_id: str, name: str | None) ->
     which is also why an import addressed straight by id cannot do this: it
     never learned the name, and guessing which collection is new would be
     worse than saying so.
+
+    A name match alone is not proof, though. Importing the same Postman
+    collection twice leaves an older Elva collection wearing the same name, and
+    returning that one would report its id, its endpoint count and its link as
+    this import's result -- and point `_settled` at the wrong document.
+    `started` is what separates them.
     """
     if name is None:
         raise ApiError(
@@ -511,7 +545,49 @@ def _look_up(*, base_url: str, token: str, company_id: str, name: str | None) ->
     ]
     if len(matches) != 1:
         raise _landed_but_unreadable(name)
-    return matches[0]
+    found = matches[0]
+    if _predates(found, started):
+        raise _older_namesake(name)
+    return found
+
+
+def _predates(row: dict[str, Any], started: float) -> bool:
+    """Whether `row` already existed when this import started.
+
+    Only a timestamp this can actually read counts against it: no `createdAt`,
+    or one in a shape `fromisoformat` cannot take, leaves the row alone -- the
+    name match is all there was before, and a parse failure is no reason to
+    turn a working import into an error.
+
+    The margin is for clock skew between here and the server, which is the only
+    thing being compared. It is generous on purpose: a false "this is old"
+    costs the user a real result, while a few minutes of slack still catches
+    the case this exists for, a namesake from another day.
+    """
+    stamp = text(row.get("createdAt")) or text(row.get("created_at"))
+    if stamp is None:
+        return False
+
+    import datetime
+
+    try:
+        when = datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=datetime.UTC)
+    return when.timestamp() < started - _CLOCK_SKEW
+
+
+def _older_namesake(name: str) -> ApiError:
+    """Same shape as `_landed_but_unreadable`: the import happened, there is no
+    id to report, and nobody should retry it into a duplicate."""
+    return ApiError(
+        "The import was accepted, but Elva's reply could not be read, and the only "
+        f"collection named {name!r} already existed before the import ran -- so this "
+        "cannot tell which collection it made.",
+        hint="Check your collections in Elva before importing again.",
+    )
 
 
 def _landed_but_unreadable(name: str) -> ApiError:
@@ -524,9 +600,8 @@ def _landed_but_unreadable(name: str) -> ApiError:
     )
 
 
-def _import_error(
-    error: HttpError, *, key: str, chosen: PostmanCollection, key_proven: bool
-) -> ElvaError:
+def _import_error(error: HttpError, *, chosen: PostmanCollection, key_proven: bool) -> ElvaError:
+    """`error.detail` arrives already scrubbed -- see `_scrubbed`."""
     if error.status == 403:
         return _forbidden(key_proven=key_proven)
     if error.status == 409:
@@ -539,12 +614,12 @@ def _import_error(
         return UsageError(
             conflict, hint="Rename the existing one, or rename the collection in Postman."
         )
-    if error.status == 404 and _redacted(error.detail, key):
+    if error.status == 404 and error.detail:
         return UsageError(
             f"Postman no longer has a collection {chosen.uid!r}",
             hint="It may have been deleted, or the id may not be one Postman knows.",
         )
-    return _postman_error(error, key=key, action=f"Importing {chosen.name!r}")
+    return _postman_error(error, action=f"Importing {chosen.name!r}")
 
 
 def _forbidden(*, key_proven: bool) -> ElvaError:
@@ -573,7 +648,7 @@ def _forbidden(*, key_proven: bool) -> ElvaError:
     )
 
 
-def _postman_error(error: HttpError, *, key: str, action: str) -> ElvaError:
+def _postman_error(error: HttpError, *, action: str) -> ElvaError:
     """A rejected request from either Postman route.
 
     401 and 403 are read as the Postman key rather than the Elva session: both
@@ -581,7 +656,7 @@ def _postman_error(error: HttpError, *, key: str, action: str) -> ElvaError:
     first already put the JWT past it. The hint names the other possibility
     anyway, because a workspace given as an id skips that lookup.
     """
-    detail = _redacted(error.detail, key)
+    detail = error.detail
     if error.status in (401, 403):
         return AuthError(
             detail or "Elva could not use that Postman API key.",
@@ -638,6 +713,22 @@ def _about_the_key(detail: str | None) -> bool:
     return any(name in lowered for name in _NAMES_THE_KEY) and any(
         verdict in lowered for verdict in _REJECTS_IT
     )
+
+
+def _scrubbed(error: HttpError, key: str) -> HttpError:
+    """`error` with the Postman key taken back out of its detail.
+
+    Both request helpers run every `HttpError` through this before any mapping
+    sees it, so `error.detail` is clean by the time `_import_error`,
+    `_named_conflict` or anything added later reads it. Redacting at each use
+    instead was one `or` branch away from shipping a path that forgot -- and
+    `http._detail` now reaches further into a response body (`errors`,
+    `results`, three levels down), so there is more of the server's text to
+    forget about.
+    """
+    if not error.detail:
+        return error
+    return HttpError(error.status, _redacted(error.detail, key))
 
 
 def _redacted(detail: str | None, key: str) -> str | None:

@@ -28,7 +28,7 @@ def to_yaml(data: bytes) -> bytes:
 
     import yaml
 
-    class _Dumper(yaml.SafeDumper):
+    class _Dumper(_base()):  # type: ignore[misc]
         def ignore_aliases(self, data: object) -> bool:
             # A spec carries no anchors worth keeping; without this a repeated
             # sub-object would come back as `&id001`/`*id001` references.
@@ -42,3 +42,17 @@ def to_yaml(data: bytes) -> bytes:
         default_flow_style=False,
         width=4096,
     ).encode("utf-8")
+
+
+def _base() -> type:
+    """libyaml's dumper where the wheel was built with it, PyYAML's otherwise.
+
+    This runs on every JSON import, `--dry-run` included, and the pure-Python
+    emitter is where the time goes: a 0.5 MB spec measured 1.07s against 0.30s.
+    Near the 10 MB limit that is the difference between a pause and a command
+    that looks hung. The two emit the same document -- same key order, same
+    unicode, same lack of anchors -- so this only picks the faster one.
+    """
+    import yaml
+
+    return getattr(yaml, "CSafeDumper", yaml.SafeDumper)

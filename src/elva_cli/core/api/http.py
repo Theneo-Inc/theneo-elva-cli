@@ -27,6 +27,8 @@ _RETRIABLE_METHODS = frozenset({"GET", "HEAD"})
 
 DEFAULT_TIMEOUT = 30.0
 UNEXPECTED_RESPONSE = "The server returned an unexpected response."
+UNREACHABLE = "Could not reach the server."
+TIMED_OUT = "The server did not answer in time."
 REDIRECTED = "The server redirected the request. Check the configured base URL."
 _REDIRECT_CODES = frozenset({301, 302, 303, 307, 308})
 
@@ -237,7 +239,14 @@ def _attempt(
         # part-way through reading the response is neither -- it arrives raw
         # from the socket, and catching only those two lets it out as an
         # unhandled traceback under exit 1 instead of a reachability failure.
-        raise ApiError("Could not reach the server.") from exc
+        #
+        # A timeout is kept apart from the rest: it means the server took the
+        # request and then ran out of clock, which for a route that does its own
+        # work upstream is a different fault from never having been reached --
+        # and a different thing to tell the user. A read timeout arrives as a
+        # bare TimeoutError, a connect timeout as URLError wrapping one; a DNS
+        # failure or a refused connection is neither.
+        raise ApiError(TIMED_OUT if _timed_out(exc) else UNREACHABLE) from exc
 
     if not raw:
         return None
@@ -245,6 +254,11 @@ def _attempt(
         return json.loads(raw)
     except json.JSONDecodeError as exc:
         raise ApiError(UNEXPECTED_RESPONSE) from exc
+
+
+def _timed_out(exc: OSError) -> bool:
+    """Whether the clock ran out, rather than the host being unreachable."""
+    return isinstance(exc, TimeoutError) or isinstance(getattr(exc, "reason", None), TimeoutError)
 
 
 _DETAIL_KEYS = ("message", "error", "detail", "errors", "results")
