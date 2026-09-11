@@ -5,7 +5,12 @@ from rich.text import Text
 
 # Imported at runtime, not under TYPE_CHECKING: singledispatch resolves the
 # annotation when register() runs, so the class has to actually exist.
-from elva_cli.core.services.config import ConfigPaths, ConfigValues  # noqa: TC001
+from elva_cli.core.services.config import (  # noqa: TC001
+    ConfigPaths,
+    ConfigValues,
+    ConfigWrite,
+    SettingRead,
+)
 from elva_cli.ui.renderables.base import aligned_rows, render
 
 
@@ -39,3 +44,14 @@ def _(result: ConfigValues) -> Group:
     if not result.profiles:
         return Group(table)
     return Group(table, Text(""), Text(f"profiles: {', '.join(result.profiles)}", style="elva.dim"))
+
+
+@render.register
+def _(result: SettingRead) -> Text:
+    return Text(str(result.value))
+
+
+@render.register
+def _(result: ConfigWrite) -> Text:
+    verb = "wrote" if result.action == "set" else "cleared"
+    return Text(f"{verb} {result.key} in {result.path}", style="elva.ok")
