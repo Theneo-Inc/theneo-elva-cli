@@ -3,6 +3,7 @@ from __future__ import annotations
 from functools import singledispatch
 from typing import TYPE_CHECKING
 
+from rich.table import Table
 from rich.text import Text
 
 if TYPE_CHECKING:
@@ -35,3 +36,12 @@ def aligned_rows(entries: Sequence[tuple[str, Text, Text]]) -> Text:
             line.append_text(note)
         lines.append(line)
     return Text("\n").join(lines)
+
+
+def table(columns: Sequence[str], rows: Sequence[Sequence[str]]) -> Table:
+    grid = Table(show_header=True, header_style="elva.key")
+    for column in columns:
+        grid.add_column(column)
+    for row in rows:
+        grid.add_row(*(Text(str(cell)) for cell in row))
+    return grid
