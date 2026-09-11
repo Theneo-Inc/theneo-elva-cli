@@ -38,6 +38,13 @@ def aligned_rows(entries: Sequence[tuple[str, Text, Text]]) -> Text:
     return Text("\n").join(lines)
 
 
+def secret_note(has_secret: bool | None) -> Text:
+    """The "Secret" column value `mcp show` and `mcp create` both render."""
+    if has_secret is None:
+        return Text("n/a")
+    return Text("set") if has_secret else Text("not set")
+
+
 def table(columns: Sequence[str], rows: Sequence[Sequence[str]]) -> Table:
     grid = Table(show_header=True, header_style="elva.key")
     for column in columns:
