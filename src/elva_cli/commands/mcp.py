@@ -87,6 +87,11 @@ def create(
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Report the tool count and operations without creating anything."
     ),
+    draft: bool = typer.Option(
+        False,
+        "--draft",
+        help="Create without publishing. Publish later with 'elva mcp publish <slug>'.",
+    ),
 ) -> None:
     """Generate an MCP server from a collection."""
     from elva_cli.core.services import mcp_create as service
@@ -96,6 +101,11 @@ def create(
         raise UsageError(
             "--operations - and --client-secret - can't both read from stdin",
             hint="Use env:NAME or file:PATH for --client-secret instead.",
+        )
+    if dry_run and draft:
+        raise UsageError(
+            "--dry-run and --draft can't be combined",
+            hint="A dry run creates nothing to leave as a draft.",
         )
     body = _build_body(
         name=name,
@@ -112,7 +122,9 @@ def create(
 
         body = service.merge_secret(body, read_secret(client_secret, flag="--client-secret"))
 
-    _confirm_publish(ctx, dry_run=dry_run)
+    _confirm_going_live(
+        ctx, prompt="Create and publish this MCP server now?", skip=dry_run or draft
+    )
 
     result: McpDryRunResult | McpCreateResult
     if dry_run:
@@ -128,8 +140,63 @@ def create(
             workspace=ctx.settings.workspace,
             collection=ctx.settings.collection,
             body=body,
+            draft=draft,
         )
     ctx.out.result(result)
+
+
+@app.command("publish")
+def publish(click_ctx: typer.Context, slug: str) -> None:
+    """Publish a draft MCP server, making it live."""
+    from elva_cli.core.services.mcp_publish import publish_mcp
+
+    ctx = get_ctx(click_ctx)
+    _confirm_going_live(ctx, prompt=f"Publish {slug!r} now?")
+    result = publish_mcp(
+        base_url=ctx.settings.base_url, workspace=ctx.settings.workspace, slug=slug
+    )
+    ctx.out.result(result)
+
+
+@app.command("logs")
+def logs(
+    click_ctx: typer.Context,
+    slug: str,
+    limit: int = typer.Option(20, "--limit", min=1, max=1000, help="How many entries to show."),
+    page: int = typer.Option(1, "--page", min=1, help="Which page of --limit-sized results."),
+    follow: bool = typer.Option(
+        False, "--follow", "-f", help="Poll for new entries and stream them."
+    ),
+) -> None:
+    """Show an MCP server's recent request history."""
+    from elva_cli.core.services.mcp_logs import fetch_logs_window, follow_logs
+    from elva_cli.ui.renderables.mcp_logs import format_log_line
+
+    ctx = get_ctx(click_ctx)
+    if follow and page != 1:
+        msg = "--follow always starts from the latest entries; it can't be combined with --page."
+        raise UsageError(msg)
+
+    base_url = ctx.settings.base_url
+    workspace = ctx.settings.workspace
+
+    if not follow:
+        result = fetch_logs_window(
+            base_url=base_url, workspace=workspace, slug=slug, page=page, limit=limit
+        )
+        ctx.out.result(result)
+        return
+
+    stream = follow_logs(
+        base_url=base_url,
+        workspace=workspace,
+        slug=slug,
+        limit=limit,
+        notify=ctx.out.warn,
+    )
+    _emit_batch(ctx, next(stream), format_log_line)
+    while not _stdin_closed():
+        _emit_batch(ctx, next(stream), format_log_line)
 
 
 def _build_body(
@@ -176,19 +243,21 @@ def _build_body(
     )
 
 
-def _confirm_publish(ctx: Ctx, *, dry_run: bool) -> None:
-    """Create publishes immediately."""
-    if dry_run:
+def _confirm_going_live(ctx: Ctx, *, prompt: str, skip: bool = False) -> None:
+    """The one confirmation boundary for anything that makes an MCP server
+    live and publicly reachable: `create` (unless --dry-run/--draft) and
+    `publish` both go through this."""
+    if skip:
         return
 
     from elva_cli.ui import prompts
 
     ctx.out.warn(
-        "This creates and immediately publishes a live, publicly reachable MCP "
-        "server -- there is no draft state yet."
+        "This makes an MCP server live and publicly reachable -- "
+        "there is no way to undo it from here."
     )
-    if not prompts.confirm(None, prompt="Create and publish this MCP server now?", ctx=ctx):
-        ctx.out.hint("Aborted; nothing was created.")
+    if not prompts.confirm(None, prompt=prompt, ctx=ctx):
+        ctx.out.hint("Aborted; nothing changed.")
         raise typer.Exit(ExitCode.OK)
 
 
@@ -216,47 +285,6 @@ def _resolve_operations(operations: list[str]) -> tuple[str, ...] | None:
     if isinstance(parsed, list) and all(isinstance(item, str) for item in parsed):
         return tuple(parsed)
     return tuple(line.strip() for line in raw.splitlines() if line.strip())
-
-
-@app.command("logs")
-def logs(
-    click_ctx: typer.Context,
-    slug: str,
-    limit: int = typer.Option(20, "--limit", min=1, max=1000, help="How many entries to show."),
-    page: int = typer.Option(1, "--page", min=1, help="Which page of --limit-sized results."),
-    follow: bool = typer.Option(
-        False, "--follow", "-f", help="Poll for new entries and stream them."
-    ),
-) -> None:
-    """Show an MCP server's recent request history."""
-    from elva_cli.core.services.mcp_logs import fetch_logs_window, follow_logs
-    from elva_cli.ui.renderables.mcp_logs import format_log_line
-
-    ctx = get_ctx(click_ctx)
-    if follow and page != 1:
-        msg = "--follow always starts from the latest entries; it can't be combined with --page."
-        raise UsageError(msg)
-
-    base_url = ctx.settings.base_url
-    workspace = ctx.settings.workspace
-
-    if not follow:
-        result = fetch_logs_window(
-            base_url=base_url, workspace=workspace, slug=slug, page=page, limit=limit
-        )
-        ctx.out.result(result)
-        return
-
-    stream = follow_logs(
-        base_url=base_url,
-        workspace=workspace,
-        slug=slug,
-        limit=limit,
-        notify=ctx.out.warn,
-    )
-    _emit_batch(ctx, next(stream), format_log_line)
-    while not _stdin_closed():
-        _emit_batch(ctx, next(stream), format_log_line)
 
 
 def _emit_batch(

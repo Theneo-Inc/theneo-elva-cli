@@ -17,6 +17,9 @@ class McpCreateResult:
     runtime_url: str | None
     auth_type: str
     has_secret: bool | None
+    status: str = "published"
+    action: str = "create"
+    already_published: bool = False
 
 
 @dataclass(frozen=True)

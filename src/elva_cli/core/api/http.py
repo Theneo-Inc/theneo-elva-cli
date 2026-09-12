@@ -241,17 +241,6 @@ def _attempt(
             raise ApiError(REDIRECTED) from exc
         raise HttpError(exc.code, _detail(exc)) from exc
     except OSError as exc:
-        # URLError and TimeoutError are both OSError, but a connection reset
-        # part-way through reading the response is neither -- it arrives raw
-        # from the socket, and catching only those two lets it out as an
-        # unhandled traceback under exit 1 instead of a reachability failure.
-        #
-        # A timeout is kept apart from the rest: it means the server took the
-        # request and then ran out of clock, which for a route that does its own
-        # work upstream is a different fault from never having been reached --
-        # and a different thing to tell the user. A read timeout arrives as a
-        # bare TimeoutError, a connect timeout as URLError wrapping one; a DNS
-        # failure or a refused connection is neither.
         raise UnreachableError(TIMED_OUT if _timed_out(exc) else UNREACHABLE) from exc
 
     if not raw:

@@ -152,11 +152,18 @@ def merge_secret(body: dict[str, Any], secret: str) -> dict[str, Any]:
 
 
 def create_mcp(
-    *, base_url: str, workspace: str | None, collection: str | None, body: dict[str, Any]
+    *,
+    base_url: str,
+    workspace: str | None,
+    collection: str | None,
+    body: dict[str, Any],
+    draft: bool = False,
 ) -> McpCreateResult:
     token, space, coll = _resolve(base_url=base_url, workspace=workspace, collection=collection)
     url = f"{base_url}/api/companies/{space.id}/collections/{coll.id}/mcps"
-    payload = {key: value for key, value in body.items() if key != "dryRun"}
+    payload = {key: value for key, value in body.items() if key not in ("dryRun", "draft")}
+    if draft:
+        payload["draft"] = True
     try:
         response = send_json(url, token=token, method="POST", payload=payload)
     except HttpError as exc:
@@ -169,8 +176,10 @@ def dry_run_mcp(
 ) -> McpDryRunResult:
     token, space, coll = _resolve(base_url=base_url, workspace=workspace, collection=collection)
     url = f"{base_url}/api/companies/{space.id}/collections/{coll.id}/mcps"
+    payload = {key: value for key, value in body.items() if key not in ("dryRun", "draft")}
+    payload["dryRun"] = True
     try:
-        response = send_json(url, token=token, method="POST", payload={**body, "dryRun": True})
+        response = send_json(url, token=token, method="POST", payload=payload)
     except HttpError as exc:
         raise _create_error(exc) from exc
     return _to_dry_run_result(response)
@@ -241,6 +250,7 @@ def _to_result(body: Any) -> McpCreateResult:
         runtime_url=as_opt_str(body.get("runtimeUrl")),
         auth_type=as_opt_str(auth_config.get("type")) or "none",
         has_secret=has_secret if isinstance(has_secret, bool) else None,
+        status=as_opt_str(body.get("status")) or "published",
     )
 
 
