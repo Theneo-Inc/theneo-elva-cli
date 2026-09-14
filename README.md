@@ -45,6 +45,88 @@ powershell -c "irm https://astral.sh/uv/install.ps1|iex" # Windows
 uv tool upgrade elva-cli      # or: pipx upgrade elva-cli
 ```
 
+## Authentication
+
+Sign in via your browser once; the session refreshes itself after that:
+
+```bash
+elva auth login
+```
+
+```
+Opening https://api.getelva.ai/api/auth/cli/authorize?redirect_uri=...
+If your browser didn't open, paste that URL in manually.
+Waiting for you to finish signing in...
+Signed in.
+```
+
+No account yet? `elva auth register` runs the same browser flow against the sign-up
+page instead. Both need a real browser and a terminal, so they refuse outright rather
+than hang when run unattended (over SSH, in CI, with stdin closed):
+
+```bash
+elva auth login
+```
+
+```
+ELVA_AUTH: elva auth login requires a browser and can't run unattended.
+  -> In CI or scripts, set ELVA_TOKEN instead.
+```
+
+### Who you are
+
+```bash
+elva whoami
+```
+
+```
+Signed in as jamie@example.com.
+```
+
+### Signing out
+
+```bash
+elva auth logout
+```
+
+```
+Signed out.
+```
+
+Running it with nothing to sign out of says so rather than erroring:
+
+```
+You weren't signed in.
+```
+
+### In CI
+
+Every command needs *some* credential, and a real login is a human-only, browser-only
+flow — CI supplies one directly instead:
+
+```bash
+export ELVA_TOKEN=...     # a personal access token, or a session token you already have
+elva mcp list
+```
+
+`ELVA_TOKEN` is checked first, ahead of anything `elva auth login` stored, and only ever
+read from the environment — never from a config file, since `elva.json` is meant to be
+committed. `elva auth logout` cannot remove it; if it's set, logout warns that it's
+still active and has to be unset by hand.
+
+The exit code says what kind of credential problem it is:
+
+```bash
+elva whoami
+case $? in
+  0) echo "signed in" ;;
+  3) echo "not signed in, or the session is no longer valid"; exit 1 ;;
+  5) echo "Elva unreachable"; exit 0 ;;
+esac
+```
+
+See [exit codes](docs/exit-codes.md) for the full table.
+
 ## Importing a spec
 
 Create a collection from an OpenAPI document:
@@ -359,16 +441,191 @@ what to pipe into `elva mcp create --operations`:
 
 ```bash
 elva collection endpoints my-api --json | jq -r '.[].key' \
-  | xargs elva mcp create --name my-mcp --operations
+  | elva mcp create --name my-mcp --operations -
 ```
 
-> **TODO (ELVA-170):** `elva mcp create` is not merged yet, so the pipeline above
-> is illustrative — the `key` field is already stable and built for it. Update the
-> exact `mcp create` flags once that command lands.
+See [MCP servers](#mcp-servers) for `elva mcp create` itself.
 
 The exit codes match `list`, plus two the spec adds: `2` when the collection has
 no spec uploaded, and `4` when the uploaded spec cannot be parsed. See
 [exit codes](docs/exit-codes.md).
+
+## MCP servers
+
+See what exists in a workspace:
+
+```bash
+elva mcp list
+```
+
+```
+SLUG          NAME           STATUS     TOOLS  COLLECTION
+payments-mcp  Payments MCP   published     17  6aa1322d7ef06cc8f9017460
+support-mcp   Support Draft  draft          9  7bb2433e8f17ad91a0285713
+```
+
+```bash
+elva mcp show payments-mcp
+```
+
+```
+Slug        payments-mcp
+Name        Payments MCP
+Status      published
+Deployment  acme/payments-mcp
+Version     2.4.1
+Auth type   bearer
+Secret      set
+Operations  17
+Collection  Payments API
+URL         https://runtime.getelva.ai/mcp/payments-mcp
+```
+
+Both are read-only, so they work unattended without `--yes` — only creating or
+publishing a server needs that.
+
+### Creating one
+
+Generate an MCP server from a collection's uploaded spec:
+
+```bash
+elva -c payments-api mcp create --name "Payments MCP"
+```
+
+```
+warning: This makes an MCP server live and publicly reachable -- there is no way to
+undo it from here.
+Create and publish this MCP server now? [y/N]: y
+
+Created 'Payments MCP'.
+
+Deployment  acme/payments-mcp
+Slug        payments-mcp
+Status      published
+Tools       17
+Auth type   none
+Secret      not set
+URL         https://runtime.getelva.ai/mcp/payments-mcp
+```
+
+With nothing else given, every operation in the collection's spec is included. Narrow
+it with repeated `--operations "METHOD /path"` (the same `key` shape
+[`collection endpoints`](#endpoints-of-a-collection) prints), or pipe a bulk list in
+with a single `--operations -`:
+
+```bash
+elva collection endpoints payments-api --json | jq -r '.[].key' \
+  | elva mcp create --name "Payments MCP" --operations -
+```
+
+Auth is `--auth-type none` (the default), `bearer`, or `api_key` (with
+`--api-key-header`/`--api-key-in`); anything else — `oauth`, `openid_connect`, `basic`,
+`jwt` — needs a full request body via `--from` instead. `--client-secret` attaches a
+secret to an `oauth`/`openid_connect` config from `--from` without ever putting it on
+the command line: `env:NAME`, `file:PATH`, or `-` for stdin, never the secret itself.
+
+`--base-url` overrides the upstream host the spec's `servers[0].url` would otherwise
+give, and `--timeout` sets the upstream request timeout in milliseconds (1000-300000).
+
+### Making it live is a confirmation boundary
+
+Creating a server — like publishing one — makes it publicly reachable immediately,
+so both warn and ask first, interactively. Unattended, that becomes a hard requirement
+for `--yes` rather than a silent default:
+
+```bash
+elva mcp create --name "Payments MCP" </dev/null
+```
+
+```
+ELVA_USAGE: cannot ask for confirmation: Create and publish this MCP server now?
+  -> Pass --yes to confirm without prompting.
+```
+
+### Drafting instead of publishing immediately
+
+`--draft` creates the server without making it live — nothing to confirm, since
+nothing is exposed yet:
+
+```bash
+elva mcp create --name "Payments MCP" --draft
+```
+
+```
+Created 'Payments MCP' as a draft.
+
+Deployment  acme/payments-mcp
+Slug        payments-mcp
+Status      draft            not serving traffic
+Tools       17
+Auth type   none
+Secret      not set
+URL
+
+Publish it with: elva mcp publish payments-mcp
+```
+
+Publish it when it's ready:
+
+```bash
+elva mcp publish payments-mcp
+```
+
+```
+warning: This makes an MCP server live and publicly reachable -- there is no way to
+undo it from here.
+Publish 'payments-mcp' now? [y/N]: y
+
+Published 'Payments MCP'.
+
+Deployment  acme/payments-mcp
+Slug        payments-mcp
+Status      published
+...
+```
+
+Publishing an already-published server is a no-op, not an error — it reports the
+current state and exits `0` rather than regenerating anything:
+
+```
+'Payments MCP' is already published.
+```
+
+`--dry-run` (on `create` only) reports the tool count and which operations would be
+included without creating anything, and — like `--draft` — needs no confirmation,
+since nothing is created either way. The two can't be combined: a dry run creates
+nothing to leave as a draft.
+
+### Recent requests
+
+```bash
+elva mcp logs payments-mcp
+```
+
+```
+TIME                  TOOL          STATUS  DURATION  AGENT   ERROR
+2026-09-12T10:03:21Z  list_invoices  200       142ms  claude
+2026-09-12T10:02:58Z  create_invoice 500        88ms  claude  upstream timeout
+```
+
+`--limit`/`--page` window through history; `--follow` streams new entries as they
+arrive instead, starting from the latest (so it can't be combined with `--page`) and
+polling until stdin closes.
+
+### In CI
+
+```bash
+elva mcp publish payments-mcp
+case $? in
+  0) echo "published (or already was)" ;;
+  2) echo "bad invocation, no --yes unattended, or the reason it can't publish"; exit 1 ;;
+  3) echo "not signed in"; exit 1 ;;
+  4) echo "the server refused to publish it (deleted collection, no spec, ...)"; exit 1 ;;
+  5) echo "Elva unreachable"; exit 0 ;;
+esac
+```
+
+See [exit codes](docs/exit-codes.md) for the full table.
 
 ## Configuration
 
