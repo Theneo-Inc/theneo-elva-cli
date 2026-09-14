@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: testpypi
     permissions:
-      id-token: write        # required for trusted publishing; no API token
+      id-token: write
     steps:
       - uses: actions/download-artifact@v4
         with:
@@ -71,3 +71,82 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  binaries:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest,    asset: elva-linux-x86_64 }
+          - { runner: ubuntu-24.04-arm, asset: elva-linux-aarch64 }
+          - { runner: macos-13,         asset: elva-darwin-x86_64 }
+          - { runner: macos-latest,     asset: elva-darwin-arm64 }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build ${{ matrix.asset }}
+        env:
+          PYAPP_PROJECT_PATH: ${{ github.workspace }}/dist/wheel.whl
+          PYAPP_EXEC_SPEC: elva_cli.main:main
+          PYAPP_PYTHON_VERSION: "3.12"
+          PYAPP_DISTRIBUTION_EMBED: "1"
+        run: |
+          cp dist/*.whl "$PYAPP_PROJECT_PATH"
+          cargo install pyapp --force --locked --root out
+          mv out/bin/pyapp "${{ matrix.asset }}"
+          chmod +x "${{ matrix.asset }}"
+
+      - name: It runs, and reports the version we tagged
+        run: |
+          got="$(./${{ matrix.asset }} --version)"
+          echo "$got"
+          case "$got" in
+            "elva ${GITHUB_REF_NAME#v} "*) ;;
+            *) echo "::error::expected version ${GITHUB_REF_NAME#v}, got: $got"; exit 1 ;;
+          esac
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  publish-binaries:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: binaries
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: elva-*
+          path: bin/
+          merge-multiple: true
+
+      - name: Checksums
+        working-directory: bin
+        run: |
+          chmod +x elva-*
+          sha256sum elva-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          case "$GITHUB_REF_NAME" in
+            *-*) prerelease="--prerelease" ;;
+            *)   prerelease="" ;;
+          esac
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+                 --title "$GITHUB_REF_NAME" --generate-notes $prerelease
+          gh release upload "$GITHUB_REF_NAME" bin/* --repo "$GITHUB_REPOSITORY" --clobber
