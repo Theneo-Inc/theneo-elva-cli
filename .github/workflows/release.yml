@@ -94,23 +94,31 @@ jobs:
 
       - name: Build ${{ matrix.asset }}
         env:
-          PYAPP_PROJECT_PATH: ${{ github.workspace }}/dist/wheel.whl
           PYAPP_EXEC_SPEC: elva_cli.main:main
           PYAPP_PYTHON_VERSION: "3.12"
           PYAPP_DISTRIBUTION_EMBED: "1"
         run: |
-          cp dist/*.whl "$PYAPP_PROJECT_PATH"
+          export PYAPP_PROJECT_PATH="$PWD/$(ls dist/*.whl | head -1)"
+          echo "embedding $PYAPP_PROJECT_PATH"
           cargo install pyapp --force --locked --root out
           mv out/bin/pyapp "${{ matrix.asset }}"
           chmod +x "${{ matrix.asset }}"
 
-      - name: It runs, and reports the version we tagged
+      - name: It runs, and reports the version we built
         run: |
-          got="$(./${{ matrix.asset }} --version)"
+          set +e
+          got="$(./${{ matrix.asset }} --version 2>&1)"
+          rc=$?
+          set -e
           echo "$got"
+          if [ $rc -ne 0 ]; then
+            echo "::error::${{ matrix.asset }} exited $rc"
+            exit 1
+          fi
+          version="$(ls dist/*.whl | head -1 | sed -E 's/.*elva_cli-(.+)-py3.*/\1/')"
           case "$got" in
-            "elva ${GITHUB_REF_NAME#v} "*) ;;
-            *) echo "::error::expected version ${GITHUB_REF_NAME#v}, got: $got"; exit 1 ;;
+            "elva $version "*) ;;
+            *) echo "::error::expected version $version, got: $got"; exit 1 ;;
           esac
 
       - uses: actions/upload-artifact@v4
