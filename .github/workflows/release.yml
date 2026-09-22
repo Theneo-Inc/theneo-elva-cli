@@ -81,7 +81,7 @@ jobs:
         include:
           - { runner: ubuntu-latest,    asset: elva-linux-x86_64 }
           - { runner: ubuntu-24.04-arm, asset: elva-linux-aarch64 }
-          - { runner: macos-13,         asset: elva-darwin-x86_64 }
+          - { runner: macos-15-intel,   asset: elva-darwin-x86_64 }
           - { runner: macos-latest,     asset: elva-darwin-arm64 }
     runs-on: ${{ matrix.runner }}
     steps:
