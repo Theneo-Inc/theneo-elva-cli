@@ -143,7 +143,7 @@ def _is_framework_error(exc: BaseException) -> TypeGuard[_FrameworkError]:
 
 def _run() -> int:
     try:
-        app(standalone_mode=False)
+        app(prog_name="elva", standalone_mode=False)
     except typer.Exit as exc:
         return int(exc.exit_code)
     except typer.Abort:
