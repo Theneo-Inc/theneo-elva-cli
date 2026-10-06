@@ -48,7 +48,9 @@ def test_missing_input_file_is_usage_error(tmp_path: Path) -> None:
         read_body(tmp_path / "missing.json", None)
 
 
-@pytest.mark.parametrize("body", [b"", b" " * (MAX_BYTES + 1), b"\xff"])
+@pytest.mark.parametrize(
+    "body", [b"", b" " * (MAX_BYTES + 1), b"\xff"], ids=["empty", "oversized", "invalid-utf8"]
+)
 def test_invalid_insight_input_does_not_reach_network(body: bytes) -> None:
     with pytest.raises(ValidationError):
         review_file(base_url="http://127.0.0.1:1", path=None, stdin=body)

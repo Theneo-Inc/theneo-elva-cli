@@ -20,20 +20,20 @@ if TYPE_CHECKING:
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX terminal/signal regression")
-def test_sigint_at_a_real_confirmation_exits_130(workdir: Path) -> None:
+def test_sigint_at_a_real_confirmation_exits_130(
+    workdir: Path, interactive_env: dict[str, str]
+) -> None:
     import pty
     import select
 
     master, slave = pty.openpty()
-    env = {k: v for k, v in os.environ.items() if not k.startswith("ELVA_") and k != "CI"}
-    env["TERM"] = "xterm-256color"
     process = subprocess.Popen(
         [sys.executable, "-m", "elva_cli", "mcp", "create", "--name", "QA cancelled"],
         stdin=slave,
         stdout=slave,
         stderr=slave,
         cwd=workdir,
-        env=env,
+        env=interactive_env,
         start_new_session=True,
     )
     os.close(slave)

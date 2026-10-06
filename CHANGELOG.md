@@ -53,6 +53,10 @@
 - Require the matching workspace-scoped repository backend before CLI rollout.
 
 ### CLI validation fixes
+- Support Windows source snapshots without POSIX-only open flags, retaining regular-file
+  and file-identity checks, and read installed skills consistently as UTF-8 on repeat setup.
+- Isolate interactive tests from all CI provider flags and make newline, permission and
+  oversized-input test cases portable across the supported OS/Python matrix.
 - Return complete MCP endpoints, including the workspace component, consistently
   from create, show, and publish; drafts have no connection URL.
 - Preserve Ctrl-C exit status 130, honor `timeout` / `ELVA_TIMEOUT` in every HTTP

@@ -95,11 +95,24 @@ class Snapshot:
 
 
 def _read(path: Path) -> bytes:
-    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode):
+        raise UsageError("Source snapshot can contain only regular files.")
+    # Windows lacks the POSIX flags. Keep byte reads and verify file identity
+    # before reading so a replacement or symlink cannot bypass filtering.
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NONBLOCK", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_BINARY", 0)
+    )
+    fd = os.open(path, flags)
     with os.fdopen(fd, "rb") as stream:
         info = os.fstat(stream.fileno())
         if not stat.S_ISREG(info.st_mode):
             raise UsageError("Source snapshot can contain only regular files.")
+        if not os.path.samestat(before, info):
+            raise UsageError("Source file changed while preparing the snapshot. Try again.")
         return stream.read(MAX_FILE_BYTES + 1)
 
 

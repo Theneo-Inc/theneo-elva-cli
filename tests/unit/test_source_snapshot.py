@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from typing import TYPE_CHECKING
 
@@ -9,8 +10,47 @@ if TYPE_CHECKING:
 
 import pytest
 
-from elva_cli.core.source_snapshot import MAX_FILE_BYTES, build_snapshot
+from elva_cli.core.source_snapshot import MAX_FILE_BYTES, _read, build_snapshot
 from elva_cli.errors import UsageError
+
+
+def test_source_read_without_posix_open_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delattr(os, "O_NONBLOCK", raising=False)
+    monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+    source = tmp_path / "app.py"
+    content = "# café\r\nvalue = 1\r\n".encode()
+    source.write_bytes(content)
+    assert _read(source) == content
+
+
+def test_source_read_refuses_symlinks_without_posix_open_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delattr(os, "O_NONBLOCK", raising=False)
+    monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+    source = tmp_path / "private.py"
+    source.write_text("private")
+    link = tmp_path / "link.py"
+    link.symlink_to(source)
+    with pytest.raises(UsageError, match="regular files"):
+        _read(link)
+
+
+def test_source_read_refuses_replaced_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    source = tmp_path / "app.py"
+    source.write_text("source")
+    replacement = tmp_path / "private.py"
+    replacement.write_text("private")
+    original_open = os.open
+
+    def replaced_open(path: Path, flags: int) -> int:
+        return original_open(replacement, flags)
+
+    monkeypatch.setattr(os, "open", replaced_open)
+    with pytest.raises(UsageError, match="changed"):
+        _read(source)
 
 
 def test_source_without_spec_includes_local_code_and_excludes_private_and_ignored_files(

@@ -26,10 +26,10 @@ def install_skill(root: Path, target: str) -> list[str]:
                     break
                 if parent.is_symlink():
                     raise UsageError("Skill installation refuses symlink destinations.")
-            content = bundle.joinpath(relative).read_text()
+            content = bundle.joinpath(relative).read_text(encoding="utf-8")
             try:
                 conflict = os.path.lexists(destination) and (
-                    not destination.is_file() or destination.read_text() != content
+                    not destination.is_file() or destination.read_text(encoding="utf-8") != content
                 )
             except (OSError, UnicodeError) as exc:
                 raise UsageError(

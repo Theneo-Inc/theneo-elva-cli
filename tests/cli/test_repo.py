@@ -371,19 +371,20 @@ def test_human_results_include_warnings_without_terminal_controls(
 @pytest.mark.parametrize(
     "command,answer", [("connect", "n"), ("connect", "y"), ("sync", "n"), ("sync", "y")]
 )
-def test_interactive_confirmation(api: Api, workdir: Path, command: str, answer: str) -> None:
+def test_interactive_confirmation(
+    api: Api, workdir: Path, command: str, answer: str, interactive_env: dict[str, str]
+) -> None:
     import pty
     import select
 
     master, slave = pty.openpty()
-    env = {k: v for k, v in os.environ.items() if not k.startswith("ELVA_") and k != "CI"}
     process = subprocess.Popen(
         [sys.executable, "-m", "elva_cli", "repo", command, "acme/api"],
         stdin=slave,
         stdout=slave,
         stderr=slave,
         cwd=workdir,
-        env={**env, **api.env, "TERM": "xterm-256color"},
+        env={**interactive_env, **api.env},
         start_new_session=True,
     )
     os.close(slave)

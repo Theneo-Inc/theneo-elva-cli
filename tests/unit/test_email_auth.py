@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -56,9 +57,13 @@ def test_only_email_and_client_proof_are_sent(flow: dict[str, Any]) -> None:
     assert endpoint == "start"
     assert set(body) == {"email", "sessionId", "codeChallenge"}
     assert body["codeChallenge"] != flow["data"]["verifier"]
+    assert flow["data"]["verifier"] not in json.dumps(asdict(flow["result"]))
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes do not apply on Windows")
+def test_signup_proof_has_private_posix_permissions(flow: dict[str, Any]) -> None:
     assert flow["path"].stat().st_mode & 0o777 == 0o600
     assert flow["path"].parent.stat().st_mode & 0o777 == 0o700
-    assert flow["data"]["verifier"] not in json.dumps(asdict(flow["result"]))
 
 
 def test_repeat_start_reuses_private_proof(flow: dict[str, Any]) -> None:

@@ -186,7 +186,10 @@ def test_review_threshold_and_json(
     )
     assert result.returncode == expected, result.stderr
     assert json.loads(result.stdout)["review"]["overallScore"] == score
-    assert api.calls == [("POST", "/api/review", SPEC)]
+    assert len(api.calls) == 1
+    method, path, body = api.calls[0]
+    assert (method, path) == ("POST", "/api/review")
+    assert body.replace("\r\n", "\n") == SPEC
     if expected:
         assert "ELVA_INSIGHTS_GATE" in result.stderr
 

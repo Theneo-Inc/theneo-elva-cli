@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -105,6 +106,21 @@ def test_setup_installs_both_targets_and_preserves_existing_instructions(tmp_pat
     with pytest.raises(UsageError, match="differs"):
         install_skill(tmp_path, "all")
     assert target.read_text() == "user instructions"
+
+
+def test_setup_preserves_utf8_with_a_non_utf8_default_encoding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    original_read = Path.read_text
+
+    def legacy_read(path: Path, encoding: str | None = None, errors: str | None = None) -> str:
+        return original_read(path, encoding=encoding or "cp1252", errors=errors)
+
+    monkeypatch.setattr(Path, "read_text", legacy_read)
+    installed = install_skill(tmp_path, "all")
+    assert install_skill(tmp_path, "all") == installed
+    expected = files("elva_cli").joinpath("assets/elva-mcp/SKILL.md").read_text(encoding="utf-8")
+    assert Path(installed[0]).read_text(encoding="utf-8") == expected
 
 
 def test_setup_refuses_symlink_without_writing_other_target(tmp_path: Path) -> None:
