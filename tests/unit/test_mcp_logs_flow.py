@@ -12,7 +12,7 @@ from elva_cli.core.api.http import HttpError, UnreachableError
 from elva_cli.core.api.targets import Target
 from elva_cli.core.services import mcp_logs as service
 from elva_cli.core.services.mcp_logs_result import LogEntry, McpLogsResult
-from elva_cli.errors import ApiError, UsageError
+from elva_cli.errors import ApiError, ForbiddenError, UsageError
 
 BASE_URL = "https://api.getelva.ai"
 COMPANY = "0123456789abcdef01234567"
@@ -192,9 +192,9 @@ class TestWindow:
         assert caught.value.hint is not None
         assert "mcp list" in caught.value.hint
 
-    def test_403_is_a_usage_error(self, monkeypatch: pytest.MonkeyPatch, signed_in: None) -> None:
+    def test_403_is_forbidden(self, monkeypatch: pytest.MonkeyPatch, signed_in: None) -> None:
         sequenced(monkeypatch, [HttpError(403, None)])
-        with pytest.raises(UsageError):
+        with pytest.raises(ForbiddenError):
             service.fetch_logs_window(
                 base_url=BASE_URL, workspace=None, slug=SLUG, page=1, limit=10
             )

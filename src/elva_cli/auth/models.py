@@ -30,9 +30,12 @@ class Credentials:
     access_expires_at: datetime | None
     refresh_token: str | None
     refresh_expires_at: datetime | None
+    api_origin: str | None = None
 
     @classmethod
-    def from_auth_tokens(cls, tokens: dict[str, Any]) -> Credentials:
+    def from_auth_tokens(
+        cls, tokens: dict[str, Any], *, api_origin: str | None = None
+    ) -> Credentials:
         """Build a session credential from the backend's AuthTokens shape:
         {"access": {"token", "expires"}, "refresh": {"token", "expires"}}.
 
@@ -44,6 +47,7 @@ class Credentials:
         refresh = tokens["refresh"]
         return cls(
             kind="session",
+            api_origin=api_origin,
             access_token=access["token"],
             access_expires_at=_parse_expiry(access["expires"]),
             refresh_token=refresh["token"],
@@ -63,6 +67,7 @@ class Credentials:
     def to_json(self) -> dict[str, Any]:
         return {
             "kind": self.kind,
+            "api_origin": self.api_origin,
             "access_token": self.access_token,
             "access_expires_at": (
                 self.access_expires_at.isoformat() if self.access_expires_at else None
@@ -80,6 +85,7 @@ class Credentials:
             raise ValueError(f"unknown credential kind: {kind!r}")
         creds = cls(
             kind=kind,
+            api_origin=data.get("api_origin"),
             access_token=data["access_token"],
             access_expires_at=(
                 _parse_expiry(data["access_expires_at"]) if data.get("access_expires_at") else None

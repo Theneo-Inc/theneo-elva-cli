@@ -1,113 +1,79 @@
 # Contributing to Elva CLI
 
+Use GitHub issues for reproducible bugs and feature requests. Report vulnerabilities
+privately using [SECURITY.md](SECURITY.md).
+
 ## Setup
 
-Requires Python 3.11 or newer.
+Use Python 3.11 or newer. Clone the repository and check out the intended branch:
 
 ```bash
-git clone git@github.com:Theneo-Inc/theneo-elva-cli.git
+git clone https://github.com/Theneo-Inc/theneo-elva-cli.git
 cd theneo-elva-cli
-
 python3 -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -e ".[dev]"
-```
-
-`-e` is an editable install, so source edits take effect with no reinstall.
-
-With [uv](https://docs.astral.sh/uv/) instead:
-
-```bash
-uv sync --extra dev
-uv run elva --version
-```
-
-## Running it
-
-```bash
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
 elva --version
 elva --help
-python -m elva_cli --version    # same entry point
 ```
 
-`elva` is only on your `PATH` in a shell where the venv is activated. A fresh terminal
-will say `command not found` until you `source .venv/bin/activate` — that is normal, not
-a broken install.
-
-To skip activation, symlink it once. The console script's shebang points at the venv's
-interpreter by absolute path, so it works from anywhere:
-
-```bash
-ln -s "$PWD/.venv/bin/elva" ~/.local/bin/elva
-```
-
-**Do not use `uv tool install --editable` for this.** It registers a global tool named
-`elva-cli` that shadows the published package, so `uvx` and `uv tool install` will keep
-reporting your local dev version instead of what is on PyPI. If you already did, undo it
-with `uv tool uninstall elva-cli`.
-
-## Pointing at staging
-
-`--base-url` is hidden from `--help` and left out of the README: users only ever have
-prod, so it is not something to advertise. It still works, and so does the env var:
-
-```bash
-elva --base-url https://api-staging.getelva.ai config list
-ELVA_BASE_URL=https://api-staging.getelva.ai elva config list
-```
-
-`elva config list` shows the resolved `base_url` regardless, which is the quickest way
-to confirm which API a shell is talking to.
+In PowerShell, use `py -m venv .venv` and `.venv\Scripts\Activate.ps1`.
+Alternatively, run `uv sync --locked --extra dev` and `uv run elva --help`.
+When changing dependencies, run `uv lock`, review its diff and commit `uv.lock`
+with `pyproject.toml`. Verify freshness with `uv lock --check`.
 
 ## Checks
 
-All three must pass before a PR merges.
+Run focused tests while editing, then the complete checks before merging:
 
 ```bash
-ruff check .           # lint
-ruff format .          # format
-mypy                   # types, strict
+ruff check .
+ruff format --check .
+mypy
 pytest
 ```
 
+Plain `mypy` checks source and tests; `mypy src` does not match CI. CI also defines
+Linux/macOS/Windows coverage for Python 3.11–3.13 and a clean-wheel/minimum-Typer
+check. Record actual results; a configured matrix is not evidence that it passed.
+
+Tests use synthetic data and isolated CLI profiles. Preserve that isolation.
+Use real services, email, source upload or publication only in the user's authorized
+scope and environment. Never include tokens or customer data in fixtures.
+
 ## Architecture
 
-The load-bearing rule: **only `ui/` may touch the terminal.** Nothing beneath it prints,
-prompts, colours, spins or exits.
+- `commands/`: Typer options and command orchestration.
+- `core/services/`: service calls and typed results.
+- `core/api/`: HTTP transport and API target resolution.
+- `core/spec/`: API format detection and normalization.
+- `core/agent_*.py`: artifact validation and skill installation.
+- `auth/`: credentials, browser/email sessions and refresh.
+- `settings/`: profiles, configuration and precedence.
+- `ui/`: terminal output and prompts.
+- `assets/elva-mcp/`: canonical installed skill.
 
+These paths are under `src/elva_cli/`. Keep terminal I/O at the command/UI boundary
+and expensive imports lazy. Every interactive input needs an unattended equivalent.
+Preserve exit codes, JSON contracts, retry IDs and the distinction between drafts
+and publication. Keep Python and backend artifact schemas aligned.
+
+## Documentation and PRs
+
+Keep the README focused on onboarding and detailed commands in `docs/`. Update help,
+the relevant guide and changelog for public behavior changes. Maintain one canonical
+skill in `src/elva_cli/assets/elva-mcp/`.
+
+Validate examples offline and check relative links:
+
+```bash
+elva --json agent validate --from examples/customer-orders/artifact.json
 ```
-src/elva_cli/
-├── main.py          Typer root, global flags, error boundary
-├── registry.py      lazy dispatch: command name -> module path
-├── commands/        parse args -> call ONE service -> hand result to ui
-│ ─────────────────  stdout/stdin boundary
-├── core/
-│   ├── services/    one function per use case -> returns a Result dataclass
-│   ├── api/         client.py + generated/ (openapi-python-client)
-│   └── spec/        loader, validate, diff
-├── ui/              console, output, prompts, theme, renderables/, views/
-├── context.py       Ctx dataclass -> typer.Context.obj
-├── settings/        configuration schema and precedence
-├── auth/            credential store and login flow
-└── errors.py        ElvaError hierarchy + ExitCode
-```
 
-Every module carries a docstring stating what belongs in it. Read those first.
+The example is synthetic. Local validation, resource creation, publication, live
+runtime access and native agent discovery are separate checks.
 
-Four conventions that are cheap now and expensive later:
-
-- **Services return typed dataclasses, never formatted strings.** `ui/output.py` decides
-  whether that becomes a table or JSON. This is why `--json` costs nothing per command.
-- **Every prompt takes its flag value first** — return it if present, prompt if there is a
-  TTY, otherwise exit `2`. A CLI that hangs waiting for input in CI is the worst failure
-  mode there is.
-- **Exit codes are a public contract.** See [docs/exit-codes.md](docs/exit-codes.md).
-  Never renumber a shipped code, and never collapse `4` into `1` -- pipelines rely on
-  the difference between a bad spec and a broken tool.
-- **Keep expensive imports out of module scope.** `httpx`, `pydantic` and Textual are
-  imported inside the functions that use them so `elva --version` does not pay for them.
-  Budget: under 200ms.
-
-## Releasing
-
-See [RELEASING.md](RELEASING.md).
+PRs should describe the problem, resulting behavior, validation and any backend
+compatibility requirements. Do not edit generated `src/elva_cli/_version.py`.
+See [AGENTS.md](AGENTS.md), [RELEASING.md](RELEASING.md) and
+[repository readiness](docs/repository-readiness.md).

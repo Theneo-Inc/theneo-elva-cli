@@ -14,7 +14,8 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from elva_cli.core.api.identity import client_headers
-from elva_cli.errors import ApiError, AuthError, ElvaError
+from elva_cli.core.api.timeout import request_timeout
+from elva_cli.errors import ApiError, AuthError, ElvaError, ForbiddenError
 
 if TYPE_CHECKING:
     import urllib.error
@@ -50,7 +51,9 @@ class UnreachableError(ApiError):
 
 def default_error(error: HttpError, *, action: str) -> ElvaError:
     """The mapping every caller shares. `action` completes "... failed"."""
-    if error.status in (401, 403):
+    if error.status == 403:
+        return ForbiddenError("You don't have permission to do this in this workspace.")
+    if error.status == 401:
         return AuthError("Your credentials are no longer valid.")
     return ApiError(f"{action} failed (HTTP {error.status}).")
 
@@ -58,7 +61,7 @@ def default_error(error: HttpError, *, action: str) -> ElvaError:
 def get_json(
     url: str,
     *,
-    token: str,
+    token: str | None,
     timeout: float = DEFAULT_TIMEOUT,
     reauth: Callable[[str], str] | None = None,
 ) -> Any:
@@ -83,6 +86,18 @@ def send_json(
         content_type="application/json",
         timeout=timeout,
         reauth=reauth,
+    )
+
+
+def send_text(url: str, *, token: str | None, content: str) -> Any:
+    """Submit raw YAML/JSON to Elva's public review engine without reparsing it."""
+    return _send(
+        url,
+        token=token,
+        method="POST",
+        body=content.encode("utf-8"),
+        content_type="text/plain; charset=utf-8",
+        timeout=DEFAULT_TIMEOUT,
     )
 
 
@@ -234,7 +249,7 @@ def _attempt(
 
     request = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
-        with _opener().open(request, timeout=timeout) as response:
+        with _opener().open(request, timeout=request_timeout(timeout)) as response:
             raw = response.read()
     except urllib.error.HTTPError as exc:
         if exc.code in _REDIRECT_CODES:

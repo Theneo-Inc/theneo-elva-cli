@@ -35,7 +35,7 @@ jobs:
         run: |
           python3 -m venv /tmp/smoke
           /tmp/smoke/bin/pip install --quiet dist/*.whl
-          cd /tmp && /tmp/smoke/bin/elva --version
+          /tmp/smoke/bin/python scripts/smoke_wheel.py
 
       - uses: actions/upload-artifact@v4
         with:

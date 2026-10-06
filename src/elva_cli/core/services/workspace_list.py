@@ -34,7 +34,12 @@ def list_workspaces(
             configured_matched=configured is None,
         )
 
-    items = _build_items(rows, active_workspace=configured, active_origin=active_origin)
+    default_id = payload.get("defaultWorkspaceId")
+    if default_id is not None and not any(row.get("id") == default_id for row in rows):
+        raise ApiError("The API's default workspace is not in your accessible workspaces.")
+    items = _build_items(
+        rows, active_workspace=configured, active_origin=active_origin, default_id=default_id
+    )
     matched = any(item.active for item in items) or configured is None
     return WorkspaceListResult(
         workspaces=items,
@@ -58,8 +63,10 @@ def _build_items(
     *,
     active_workspace: str | None,
     active_origin: str,
+    default_id: str | None = None,
 ) -> list[WorkspaceItem]:
-    auto_select = active_workspace is None and len(rows) == 1
+    auto_select = active_workspace is None
+    default_row = next((row for row in rows if row.get("id") == default_id), rows[0])
     wanted = active_workspace.lower() if active_workspace else None
     match_by_id = active_workspace is not None and _OBJECT_ID.match(wanted or "") is not None
 
@@ -76,7 +83,7 @@ def _build_items(
 
         is_active = False
         source: str | None = None
-        if auto_select:
+        if auto_select and row is default_row:
             is_active = True
             source = "auto"
         elif wanted is not None:

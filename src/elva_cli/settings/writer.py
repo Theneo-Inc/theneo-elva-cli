@@ -149,7 +149,12 @@ def _atomic_write(path: Path, text: str, *, file_mode: int, dir_mode: int | None
 
 
 def _write_dict(kind: Target, path: Path, data: dict[str, Any]) -> None:
-    text = json.dumps(data, indent=2, sort_keys=True) + "\n"
+    try:
+        text = json.dumps(data, indent=2, sort_keys=True, allow_nan=False) + "\n"
+    except ValueError as exc:
+        raise ConfigError(
+            f"{path} contains a non-finite number; remove it before saving other settings."
+        ) from exc
     if kind == "user":
         _atomic_write(path, text, file_mode=_USER_FILE_MODE, dir_mode=_USER_DIR_MODE)
     else:
