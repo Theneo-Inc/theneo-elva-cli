@@ -1,0 +1,76 @@
+name: installer
+
+on:
+  push:
+    branches: [main]
+    paths: ["install/**", ".github/workflows/installer.yml"]
+  pull_request:
+    paths: ["install/**", ".github/workflows/installer.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installer-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --global firebase-tools@15.32.1
+      - name: Prepare installer
+        run: |
+          sh -n install/install.sh
+          mkdir -p install/public
+          cp install/install.sh install/public/install.sh
+      - name: Test hosting
+        run: >-
+          firebase emulators:exec
+          --project demo-elva-cli-install
+          --config install/firebase.json
+          --only hosting
+          "sh install/test-hosting.sh"
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: installer
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm install --global firebase-tools@15.32.1
+      - name: Prepare installer
+        run: |
+          mkdir -p install/public
+          cp install/install.sh install/public/install.sh
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.ELVA_INSTALLER_WIF_PROVIDER }}
+          service_account: ${{ vars.ELVA_INSTALLER_DEPLOY_SA }}
+      - name: Deploy installer
+        run: >-
+          firebase deploy
+          --project elva-marketing-prod
+          --config install/firebase.json
+          --only hosting
+          --non-interactive
+      - name: Verify published script
+        run: |
+          curl --fail --silent --show-error --retry 5 --retry-all-errors \
+            'https://elva-cli-install.web.app/?revision=${{ github.sha }}' \
+            -o /tmp/published-install.sh
+          cmp install/install.sh /tmp/published-install.sh

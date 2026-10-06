@@ -221,3 +221,9 @@ __marimo__/
 .venv/
 src/elva_cli/_version.py
 .ruff_cache/
+
+/install/public/
+/install/.firebase/
+firebase-debug.log*
+ui-debug.log*
+gha-creds-*.json

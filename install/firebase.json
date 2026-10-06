@@ -1,0 +1,20 @@
+{
+  "hosting": {
+    "site": "elva-cli-install",
+    "public": "public",
+    "ignore": ["**/.*"],
+    "rewrites": [{"source": "/", "destination": "/install.sh"}],
+    "headers": [{
+      "source": "**",
+      "headers": [
+        {"key": "Content-Type", "value": "text/plain; charset=utf-8"},
+        {"key": "Cache-Control", "value": "public, max-age=300"},
+        {"key": "X-Content-Type-Options", "value": "nosniff"}
+      ]
+    }]
+  },
+  "emulators": {
+    "hosting": {"host": "127.0.0.1", "port": 5000},
+    "ui": {"enabled": false}
+  }
+}
