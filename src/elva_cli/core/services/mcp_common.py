@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from elva_cli.errors import UsageError
+from elva_cli.errors import ForbiddenError, UsageError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -37,13 +37,29 @@ def as_opt_str(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def workspace_forbidden() -> UsageError:
+def workspace_forbidden() -> ForbiddenError:
     """The 403 both modules return: the caller can see the workspace exists but
     isn't a member."""
-    return UsageError(
+    return ForbiddenError(
         "you don't have access to this workspace",
         hint="Check --workspace.",
     )
+
+
+def runtime_url(row: dict[str, Any]) -> str | None:
+    """Prefer the API's canonical endpoint; support older host-only responses."""
+    if row.get("status") == "draft":
+        return None
+    if "mcpUrl" in row:
+        return as_opt_str(row.get("mcpUrl"))
+    base = as_opt_str(row.get("runtimeUrl"))
+    settings = row.get("settings")
+    custom_slug = as_opt_str(settings.get("customSlug")) if isinstance(settings, dict) else None
+    deployment_id = as_opt_str(row.get("deploymentId"))
+    target = custom_slug or deployment_id
+    if not base or not target:
+        return None
+    return f"{base.rstrip('/')}/mcp/{target}"
 
 
 def unknown_server(slug: str) -> UsageError:

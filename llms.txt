@@ -1,0 +1,19 @@
+# Elva CLI
+
+Create a customer MCP and API contract from an API repository using the user's
+existing agent. The agent generates a sanitized API artifact; Elva receives that
+artifact, not repository source through this workflow.
+
+- [Quickstart](README.md)
+- [Canonical skill](src/elva_cli/assets/elva-mcp/SKILL.md)
+- [Agent workflow](docs/agent-workflow.md)
+- [Agent interface](docs/agent-interface.md)
+- [Email signup](docs/email-signup.md)
+- [Commands](docs/commands.md)
+- [Contracts](docs/contracts.md)
+- [Privacy](docs/privacy.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Example](examples/customer-orders/README.md)
+
+Use `elva --json schema` and `elva --json agent schema` for installed schemas.
+This index does not install a skill or guarantee automatic agent selection.

@@ -9,11 +9,15 @@ from __future__ import annotations
 from elva_cli.ui.renderables import auth as _auth  # noqa: F401  registers renderers
 from elva_cli.ui.renderables import collection as _collection  # noqa: F401  registers renderers
 from elva_cli.ui.renderables import config as _config  # noqa: F401  registers renderers
+from elva_cli.ui.renderables import contract as _contract  # noqa: F401  registers renderers
 from elva_cli.ui.renderables import import_spec as _import_spec  # noqa: F401  registers renderers
+from elva_cli.ui.renderables import insights as _insights  # noqa: F401  registers renderers
 from elva_cli.ui.renderables import mcp as _mcp  # noqa: F401  registers renderers
 from elva_cli.ui.renderables import mcp_create as _mcp_create  # noqa: F401  registers renderers
 from elva_cli.ui.renderables import mcp_logs as _mcp_logs  # noqa: F401  registers renderers
+from elva_cli.ui.renderables import plan as _plan  # noqa: F401
 from elva_cli.ui.renderables import postman as _postman  # noqa: F401  registers renderers
+from elva_cli.ui.renderables import repo as _repo  # noqa: F401  registers renderers
 from elva_cli.ui.renderables import whoami as _whoami  # noqa: F401  registers renderers
 from elva_cli.ui.renderables import workspace as _workspace  # noqa: F401  registers renderers
 from elva_cli.ui.renderables.base import render

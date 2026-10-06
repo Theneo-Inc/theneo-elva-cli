@@ -317,3 +317,114 @@ def _stdin_closed() -> bool:
         return os.read(fd, 4096) == b""
     except OSError:
         return False
+
+
+@app.command("plan")
+def plan(
+    click_ctx: typer.Context,
+    prompt: str = typer.Option(..., help="Describe the customer's tasks and permitted API fields."),
+    repo: str | None = typer.Option(None, help="Connected GitHub repository OWNER/REPO or ID."),
+    source: list[str] = typer.Option(
+        [], help="Source collection ID; repeat to narrow the catalog."
+    ),
+    auth_type: str = typer.Option(
+        "bearer", help="Customer upstream credentials: bearer, api_key, or none."
+    ),
+    api_key_header: str | None = typer.Option(None, help="Header for api_key authentication."),
+    sync: bool = typer.Option(
+        False, help="Connect/rescan the repository and wait before planning."
+    ),
+    ai: bool = typer.Option(False, help="Enable AI repository scanning on a new connection."),
+    branch: str | None = typer.Option(None, help="Branch for a new repository connection."),
+    name: str | None = typer.Option(None, help="Name of the resulting contract."),
+    api_base_url: str | None = typer.Option(
+        None, help="Public upstream API URL when absent from source."
+    ),
+    out: Path | None = typer.Option(None, help="Save the reviewed plan to a new JSON file."),
+) -> None:
+    """Plan a contract and MCP from repo APIs. Does not publish. --sync requires --yes in CI."""
+    from elva_cli.commands.contract import _confirm
+    from elva_cli.core.services.plan import create_plan, save_plan
+    from elva_cli.core.services.repo import connect_repo, list_repos, sync_repo
+
+    if auth_type not in {"bearer", "api_key", "none"}:
+        raise UsageError("--auth-type must be bearer, api_key or none.")
+    if api_key_header and auth_type != "api_key":
+        raise UsageError("--api-key-header requires --auth-type api_key.")
+    if (sync or ai or branch) and not repo:
+        raise UsageError("Repository scan options require --repo.")
+    if (ai or branch) and not sync:
+        raise UsageError("--ai and --branch require --sync.")
+    ctx = get_ctx(click_ctx)
+    body: dict[str, Any] = {
+        "kind": "mcp",
+        "prompt": prompt,
+        "audience": "partner",
+        "authType": auth_type,
+    }
+    if api_key_header:
+        body["apiKeyHeader"] = api_key_header
+    if source:
+        body["collectionIds"] = source
+    if name:
+        body["name"] = name
+    if api_base_url:
+        body["baseUrl"] = api_base_url
+    if repo:
+        connected = list_repos(base_url=ctx.settings.base_url, workspace=ctx.settings.workspace)
+        matches = [
+            r
+            for r in connected.repositories
+            if repo.lower()
+            in {
+                r.id,
+                f"{r.owner}/{r.name}".lower(),
+            }
+        ]
+        if len(matches) > 1:
+            raise UsageError("Repository reference is ambiguous. Use its ID.")
+        if sync:
+            if matches:
+                if ai or branch:
+                    raise UsageError(
+                        "Set branch/AI options with elva repo connect, then plan --sync."
+                    )
+                scanned = sync_repo(
+                    base_url=ctx.settings.base_url,
+                    workspace=connected.company_id,
+                    repository=matches[0].id,
+                    wait=True,
+                    wait_timeout=900,
+                    confirm=lambda _: _confirm(ctx)(f"Rescan {repo} before planning?"),
+                    progress=ctx.out.hint,
+                )
+            else:
+                scanned = connect_repo(
+                    base_url=ctx.settings.base_url,
+                    workspace=connected.company_id,
+                    repository=repo,
+                    branch=branch,
+                    ai_enabled=ai,
+                    wait=True,
+                    wait_timeout=900,
+                    confirm=lambda _: _confirm(ctx)(f"Connect and scan {repo} before planning?"),
+                    progress=ctx.out.hint,
+                )
+            if scanned.error or not scanned.job or scanned.job.status != "done":
+                raise UsageError(
+                    "Repository scan did not complete. Inspect it with elva repo status."
+                )
+            body["repoId"] = scanned.repository.id
+        elif matches:
+            body["repoId"] = matches[0].id
+        else:
+            raise UsageError("Repository is not connected. Add --sync to connect and scan it.")
+    result = create_plan(
+        base_url=ctx.settings.base_url,
+        workspace=ctx.settings.workspace,
+        body=body,
+        reference=None,
+        progress=ctx.out.hint,
+    )
+    save_plan(result, out)
+    ctx.out.result(result)

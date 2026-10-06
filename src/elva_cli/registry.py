@@ -26,11 +26,20 @@ class Lazy:
 
 class LazyGroup(TyperGroup):
     commands_: ClassVar[dict[str, Lazy]] = {
+        "agent": Lazy(
+            "elva_cli.commands.agent", "Build MCPs with your own agent; upload only API artifacts."
+        ),
+        "schema": Lazy("elva_cli.commands.schema", "Discover the CLI command schema."),
+        "apply": Lazy("elva_cli.commands.apply", "Apply or resume a reviewed AI plan."),
+        "plan": Lazy("elva_cli.commands.plan", "Inspect and resume AI planning jobs."),
         "auth": Lazy("elva_cli.commands.auth", "Sign in and manage credentials."),
         "collection": Lazy("elva_cli.commands.collection", "Inspect collections in a workspace."),
         "config": Lazy("elva_cli.commands.config", "Inspect resolved configuration."),
+        "contract": Lazy("elva_cli.commands.contract", "Manage API contracts and releases."),
         "import": Lazy("elva_cli.commands.import_", "Import an API into a collection."),
+        "insights": Lazy("elva_cli.commands.insights", "Review API quality and security."),
         "mcp": Lazy("elva_cli.commands.mcp", "Manage MCP servers."),
+        "repo": Lazy("elva_cli.commands.repo", "Connect and sync GitHub repositories."),
         "whoami": Lazy("elva_cli.commands.whoami", "Show who you're signed in as."),
         "workspace": Lazy("elva_cli.commands.workspace", "Manage workspaces."),
     }

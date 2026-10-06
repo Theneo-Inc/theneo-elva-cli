@@ -3,6 +3,8 @@ from __future__ import annotations
 from rich.text import Text
 
 from elva_cli.core.services.auth_result import (
+    AuthFailure,
+    EmailAuthResult,
     LoginResult,
     LogoutResult,
     LogoutStatus,
@@ -33,3 +35,18 @@ def _(result: LogoutResult) -> Text:
             style="elva.warn",
         )
     return Text("Signed out.", style="elva.ok")
+
+
+@render.register
+def _(result: EmailAuthResult) -> Text:
+    lines = [result.message or result.status]
+    if result.session_id:
+        lines.append(f"Session: {result.session_id}")
+    if result.next_action:
+        lines.append(result.next_action)
+    return Text("\n".join(lines))
+
+
+@render.register
+def _(result: AuthFailure) -> Text:
+    return Text(result.message)
