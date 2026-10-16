@@ -72,9 +72,15 @@ ASSIGNMENT = re.compile(
     r"(['\"]?\b[\w-]*(?:password|passwd|secret|token|api[_-]?key)[\w-]*['\"]?\s*[:=]\s*)(['\"])([^'\"\n]+)\2",
     re.I,
 )
+# Redact the whole unquoted value through end of line (YAML `key: value`,
+# .env/ini `KEY=value`) so multi-word secrets are not leaked a token at a time.
+# A whitespace-preceded `# ...` inline comment is a comment, not part of the
+# value, so it is left intact; a bare `#` inside the value is redacted with it.
 BARE_ASSIGNMENT = re.compile(
-    r"(^[ \t]*[\w-]*(?:password|passwd|secret|token|api[_-]?key)[\w-]*[ \t]*:[ \t]*)"
-    r"(?![\s\"\'|>\[{])([^\s#]+)",
+    r"(^[ \t]*[\w-]*(?:password|passwd|secret|token|api[_-]?key)[\w-]*[ \t]*[:=][ \t]*)"
+    r"(?![\s\"\'|>\[{])"
+    r"(\S(?:.*?\S)?)"
+    r"(?=(?:[ \t]+#[^\n]*)?[ \t]*$)",
     re.I | re.M,
 )
 PRIVATE_KEY = re.compile(

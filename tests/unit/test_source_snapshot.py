@@ -103,6 +103,57 @@ def test_redacts_embedded_credentials_without_removing_the_assignment(tmp_path: 
     assert snapshot.redactions >= 2
 
 
+def test_bare_assignment_redacts_full_unquoted_multiword_yaml_value(tmp_path: Path) -> None:
+    (tmp_path / "config.yaml").write_text("password: correct horse battery staple\n")
+    snapshot = build_snapshot(tmp_path)
+    content = snapshot.payload["files"][0]["content"]
+    assert content == "password: [REDACTED]\n"
+    for word in ("correct", "horse", "battery", "staple"):
+        assert word not in content
+    assert snapshot.redactions == 1
+
+
+def test_bare_assignment_redacts_full_unquoted_env_style_value(tmp_path: Path) -> None:
+    (tmp_path / "config.txt").write_text("API_KEY=multi word value\n")
+    snapshot = build_snapshot(tmp_path)
+    content = snapshot.payload["files"][0]["content"]
+    assert content == "API_KEY=[REDACTED]\n"
+    for word in ("multi", "word", "value"):
+        assert word not in content
+    assert snapshot.redactions == 1
+
+
+def test_bare_assignment_redacts_value_but_keeps_trailing_comment(tmp_path: Path) -> None:
+    (tmp_path / "config.yaml").write_text(
+        "password: correct horse battery staple # keep this note\n"
+    )
+    snapshot = build_snapshot(tmp_path)
+    content = snapshot.payload["files"][0]["content"]
+    assert content == "password: [REDACTED] # keep this note\n"
+    for word in ("correct", "horse", "battery", "staple"):
+        assert word not in content
+
+
+def test_quoted_single_and_multiword_values_still_redacted(tmp_path: Path) -> None:
+    (tmp_path / "config.yaml").write_text(
+        'password: "correct horse battery staple"\nsecret: "single"\n'
+    )
+    snapshot = build_snapshot(tmp_path)
+    content = snapshot.payload["files"][0]["content"]
+    assert 'password: "[REDACTED]"' in content
+    assert 'secret: "[REDACTED]"' in content
+    for word in ("correct", "horse", "battery", "staple", "single"):
+        assert word not in content
+
+
+def test_non_secret_key_multiword_value_is_not_redacted(tmp_path: Path) -> None:
+    (tmp_path / "config.yaml").write_text("description: correct horse battery staple\n")
+    snapshot = build_snapshot(tmp_path)
+    content = snapshot.payload["files"][0]["content"]
+    assert content == "description: correct horse battery staple\n"
+    assert snapshot.redactions == 0
+
+
 def test_oversized_source_is_not_silently_omitted(tmp_path: Path) -> None:
     (tmp_path / "app.py").write_text("x" * (MAX_FILE_BYTES + 1))
     with pytest.raises(UsageError, match="256 KiB"):
