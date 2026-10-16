@@ -104,7 +104,7 @@ def test_redacts_embedded_credentials_without_removing_the_assignment(tmp_path: 
 
 
 def test_bare_assignment_redacts_full_unquoted_multiword_yaml_value(tmp_path: Path) -> None:
-    (tmp_path / "config.yaml").write_text("password: correct horse battery staple\n")
+    (tmp_path / "config.yaml").write_text("password: correct horse battery staple\n", newline="")
     snapshot = build_snapshot(tmp_path)
     content = snapshot.payload["files"][0]["content"]
     assert content == "password: [REDACTED]\n"
@@ -114,7 +114,7 @@ def test_bare_assignment_redacts_full_unquoted_multiword_yaml_value(tmp_path: Pa
 
 
 def test_bare_assignment_redacts_full_unquoted_env_style_value(tmp_path: Path) -> None:
-    (tmp_path / "config.txt").write_text("API_KEY=multi word value\n")
+    (tmp_path / "config.txt").write_text("API_KEY=multi word value\n", newline="")
     snapshot = build_snapshot(tmp_path)
     content = snapshot.payload["files"][0]["content"]
     assert content == "API_KEY=[REDACTED]\n"
@@ -125,7 +125,7 @@ def test_bare_assignment_redacts_full_unquoted_env_style_value(tmp_path: Path) -
 
 def test_bare_assignment_redacts_value_but_keeps_trailing_comment(tmp_path: Path) -> None:
     (tmp_path / "config.yaml").write_text(
-        "password: correct horse battery staple # keep this note\n"
+        "password: correct horse battery staple # keep this note\n", newline=""
     )
     snapshot = build_snapshot(tmp_path)
     content = snapshot.payload["files"][0]["content"]
@@ -136,7 +136,7 @@ def test_bare_assignment_redacts_value_but_keeps_trailing_comment(tmp_path: Path
 
 def test_quoted_single_and_multiword_values_still_redacted(tmp_path: Path) -> None:
     (tmp_path / "config.yaml").write_text(
-        'password: "correct horse battery staple"\nsecret: "single"\n'
+        'password: "correct horse battery staple"\nsecret: "single"\n', newline=""
     )
     snapshot = build_snapshot(tmp_path)
     content = snapshot.payload["files"][0]["content"]
@@ -147,10 +147,61 @@ def test_quoted_single_and_multiword_values_still_redacted(tmp_path: Path) -> No
 
 
 def test_non_secret_key_multiword_value_is_not_redacted(tmp_path: Path) -> None:
-    (tmp_path / "config.yaml").write_text("description: correct horse battery staple\n")
+    (tmp_path / "config.yaml").write_text("description: correct horse battery staple\n", newline="")
     snapshot = build_snapshot(tmp_path)
     content = snapshot.payload["files"][0]["content"]
     assert content == "description: correct horse battery staple\n"
+    assert snapshot.redactions == 0
+
+
+# CRLF variants built with explicit b"\r\n" so they exercise Windows line
+# endings on every OS. Each secret-bearing case leaked under commit c1882378,
+# whose end-of-value lookahead (`[ \t]*$`) rejected the `\r` before the `\n`.
+def test_bare_assignment_redacts_multiword_yaml_value_crlf(tmp_path: Path) -> None:
+    (tmp_path / "config.yaml").write_bytes(b"password: correct horse battery staple\r\n")
+    snapshot = build_snapshot(tmp_path)
+    content = snapshot.payload["files"][0]["content"]
+    assert content == "password: [REDACTED]\r\n"
+    for word in ("correct", "horse", "battery", "staple"):
+        assert word not in content
+    assert snapshot.redactions == 1
+
+
+def test_bare_assignment_redacts_env_style_value_crlf(tmp_path: Path) -> None:
+    (tmp_path / "config.txt").write_bytes(b"API_KEY=multi word value\r\n")
+    snapshot = build_snapshot(tmp_path)
+    content = snapshot.payload["files"][0]["content"]
+    assert content == "API_KEY=[REDACTED]\r\n"
+    for word in ("multi", "word", "value"):
+        assert word not in content
+    assert snapshot.redactions == 1
+
+
+def test_bare_assignment_keeps_trailing_comment_crlf(tmp_path: Path) -> None:
+    (tmp_path / "config.yaml").write_bytes(
+        b"password: correct horse battery staple # keep this note\r\n"
+    )
+    snapshot = build_snapshot(tmp_path)
+    content = snapshot.payload["files"][0]["content"]
+    assert content == "password: [REDACTED] # keep this note\r\n"
+    for word in ("correct", "horse", "battery", "staple"):
+        assert word not in content
+
+
+def test_bare_assignment_redacts_sensitive_value_crlf(tmp_path: Path) -> None:
+    (tmp_path / "config.yaml").write_bytes(b"password: sensitive-value\r\n")
+    snapshot = build_snapshot(tmp_path)
+    content = snapshot.payload["files"][0]["content"]
+    assert content == "password: [REDACTED]\r\n"
+    assert "sensitive-value" not in content
+    assert snapshot.redactions == 1
+
+
+def test_non_secret_key_multiword_value_is_not_redacted_crlf(tmp_path: Path) -> None:
+    (tmp_path / "config.yaml").write_bytes(b"description: correct horse battery staple\r\n")
+    snapshot = build_snapshot(tmp_path)
+    content = snapshot.payload["files"][0]["content"]
+    assert content == "description: correct horse battery staple\r\n"
     assert snapshot.redactions == 0
 
 

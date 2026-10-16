@@ -76,11 +76,13 @@ ASSIGNMENT = re.compile(
 # .env/ini `KEY=value`) so multi-word secrets are not leaked a token at a time.
 # A whitespace-preceded `# ...` inline comment is a comment, not part of the
 # value, so it is left intact; a bare `#` inside the value is redacted with it.
+# The end-of-value boundary matches LF, CRLF, a lone CR, or end of string, and
+# never captures the line terminator, so the original ending is preserved.
 BARE_ASSIGNMENT = re.compile(
     r"(^[ \t]*[\w-]*(?:password|passwd|secret|token|api[_-]?key)[\w-]*[ \t]*[:=][ \t]*)"
     r"(?![\s\"\'|>\[{])"
     r"(\S(?:.*?\S)?)"
-    r"(?=(?:[ \t]+#[^\n]*)?[ \t]*$)",
+    r"(?=(?:[ \t]+#[^\r\n]*)?[ \t]*(?:\r|\n|$))",
     re.I | re.M,
 )
 PRIVATE_KEY = re.compile(
