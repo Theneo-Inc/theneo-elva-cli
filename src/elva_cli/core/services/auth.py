@@ -17,6 +17,7 @@ from elva_cli.auth import logout as logout_credentials
 from elva_cli.auth import save_login
 from elva_cli.auth.store import StoreUnavailableError
 from elva_cli.core.api.identity import client_headers
+from elva_cli.core.api.timeout import request_timeout
 from elva_cli.core.services.auth_result import LoginResult, LogoutResult, RegisterResult
 from elva_cli.errors import ApiError, AuthError
 
@@ -271,7 +272,7 @@ def _browser_pkce_flow(
     )
     try:
         email: str = payload["user"]["email"]
-        save_login(payload)
+        save_login(payload, base_url=base_url)
     except (KeyError, TypeError, ValueError) as exc:
         raise ApiError(text.unexpected) from exc
     except (StoreUnavailableError, OSError) as exc:
@@ -380,7 +381,9 @@ def _exchange_token(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=_EXCHANGE_TIMEOUT_SECONDS) as response:
+        with urllib.request.urlopen(
+            request, timeout=request_timeout(_EXCHANGE_TIMEOUT_SECONDS)
+        ) as response:
             raw = response.read()
     except urllib.error.HTTPError as exc:
         if exc.code in (400, 401):

@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "requestId": "1caaed9d-d3f0-4158-8ac0-ece111c2481c",
+  "name": "Customer Orders",
+  "audience": "partner",
+  "auth": {
+    "type": "bearer"
+  },
+  "spec": {
+    "openapi": "3.0.3",
+    "info": {
+      "title": "Orders",
+      "version": "1"
+    },
+    "servers": [
+      {
+        "url": "https://api.example.com"
+      }
+    ],
+    "paths": {
+      "/orders": {
+        "get": {
+          "responses": {
+            "200": {
+              "description": "OK",
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "status": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from elva_cli.core.api.http import HttpError, default_error, get_json
 from elva_cli.core.openapi_ops import Operation, extract_operations, parse_spec
-from elva_cli.errors import ApiError, AuthError, ElvaError, UsageError
+from elva_cli.errors import ApiError, AuthError, ElvaError, ForbiddenError, UsageError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -218,7 +218,11 @@ def _list_error(exc: HttpError) -> ElvaError:
     """Map a rejected listing. 403/404 are about the workspace, not the token."""
     if exc.status == 401:
         return AuthError("Your credentials are no longer valid.")
-    if exc.status in (403, 404):
+    if exc.status == 403:
+        return ForbiddenError(
+            "you don't have access to this workspace", hint="Check --workspace or ask an admin."
+        )
+    if exc.status == 404:
         return UsageError(
             "that workspace does not exist, or you cannot see it",
             hint="Check --workspace or ELVA_WORKSPACE.",
@@ -232,7 +236,9 @@ def _detail_error(exc: HttpError, *, name: str) -> ElvaError:
     """
     if exc.status == 401:
         return AuthError("Your credentials are no longer valid.")
-    if exc.status in (403, 404):
+    if exc.status == 403:
+        return ForbiddenError(f"you don't have access to collection {name!r}")
+    if exc.status == 404:
         return UsageError(
             f"collection {name!r} not found",
             hint="It may have been deleted; run 'elva collection list'.",

@@ -17,13 +17,13 @@ from typing import TYPE_CHECKING, Any
 from elva_cli.auth import get_access_token
 from elva_cli.core.api.http import HttpError, default_error, send_json
 from elva_cli.core.api.targets import resolve_collection, resolve_workspace
-from elva_cli.core.services.mcp_common import as_int, as_opt_str, as_str, reauth_for
+from elva_cli.core.services.mcp_common import as_int, as_opt_str, as_str, reauth_for, runtime_url
 from elva_cli.core.services.mcp_create_result import (
     McpCreateResult,
     McpDryRunResult,
     OperationOutcome,
 )
-from elva_cli.errors import ApiError, UsageError, ValidationError
+from elva_cli.errors import ApiError, ForbiddenError, UsageError, ValidationError
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -159,6 +159,7 @@ def create_mcp(
     body: dict[str, Any],
     draft: bool = False,
 ) -> McpCreateResult:
+    _reject_empty_selection(body)
     token, space, coll = _resolve(base_url=base_url, workspace=workspace, collection=collection)
     url = f"{base_url}/api/companies/{space.id}/collections/{coll.id}/mcps"
     payload = {key: value for key, value in body.items() if key not in ("dryRun", "draft")}
@@ -174,6 +175,7 @@ def create_mcp(
 def dry_run_mcp(
     *, base_url: str, workspace: str | None, collection: str | None, body: dict[str, Any]
 ) -> McpDryRunResult:
+    _reject_empty_selection(body)
     token, space, coll = _resolve(base_url=base_url, workspace=workspace, collection=collection)
     url = f"{base_url}/api/companies/{space.id}/collections/{coll.id}/mcps"
     payload = {key: value for key, value in body.items() if key not in ("dryRun", "draft")}
@@ -183,6 +185,16 @@ def dry_run_mcp(
     except HttpError as exc:
         raise _create_error(exc) from exc
     return _to_dry_run_result(response)
+
+
+def _reject_empty_selection(body: dict[str, Any]) -> None:
+    # Older APIs interpret [] as "use the default selection", potentially all
+    # operations. An empty pipeline must never broaden the requested exposure.
+    if body.get("selectedOperations") == []:
+        raise UsageError(
+            "no operations were selected",
+            hint="Select at least one operation, or omit --operations to use the defaults.",
+        )
 
 
 def _resolve(
@@ -247,7 +259,7 @@ def _to_result(body: Any) -> McpCreateResult:
         slug=as_str(body.get("mcpSlug")),
         name=as_str(body.get("apiName")),
         tool_count=as_int(body.get("toolCount")),
-        runtime_url=as_opt_str(body.get("runtimeUrl")),
+        runtime_url=runtime_url(body),
         auth_type=as_opt_str(auth_config.get("type")) or "none",
         has_secret=has_secret if isinstance(has_secret, bool) else None,
         status=as_opt_str(body.get("status")) or "published",
@@ -273,6 +285,15 @@ def _to_outcome(row: dict[str, Any]) -> OperationOutcome:
 
 def _create_error(error: HttpError) -> Exception:
     if error.status == 400:
+        if (
+            error.detail
+            and "not allowed" in error.detail
+            and any(field in error.detail for field in ("dryRun", "draft"))
+        ):
+            return ApiError(
+                "This server does not support MCP previews or drafts yet.",
+                hint="Ask the server administrator to deploy the matching Elva API version.",
+            )
         return ValidationError(error.detail or "The server rejected this MCP configuration.")
     if error.status == 402:
         return UsageError(
@@ -280,7 +301,7 @@ def _create_error(error: HttpError) -> Exception:
             hint="Upgrade your plan, or remove an existing MCP server.",
         )
     if error.status == 403:
-        return UsageError(
+        return ForbiddenError(
             "you need editor access to create MCP servers in this workspace",
             hint="Ask a workspace admin, or check --workspace.",
         )

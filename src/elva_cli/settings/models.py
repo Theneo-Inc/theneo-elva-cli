@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 from pydantic import BaseModel, ConfigDict, field_validator
 
 DEFAULT_BASE_URL = "https://api.getelva.ai"
@@ -32,7 +34,7 @@ class Settings(BaseModel):
     @field_validator("timeout")
     @classmethod
     def _must_be_positive(cls, value: float) -> float:
-        if value <= 0:
-            msg = "must be greater than 0"
+        if not math.isfinite(value) or value <= 0:
+            msg = "must be finite and greater than 0"
             raise ValueError(msg)
         return value

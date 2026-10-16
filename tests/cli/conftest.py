@@ -19,11 +19,22 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from elva_cli.context import CI_VARS
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
 
 TIMEOUT = 30
+
+
+@pytest.fixture
+def interactive_env() -> dict[str, str]:
+    """Simulate a user's terminal without inheriting any CI provider markers."""
+    return {
+        **{k: v for k, v in os.environ.items() if not k.startswith("ELVA_") and k not in CI_VARS},
+        "TERM": "xterm-256color",
+    }
 
 
 @pytest.fixture

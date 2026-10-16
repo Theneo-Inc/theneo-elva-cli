@@ -36,9 +36,9 @@ def resolve_workspace(
 ) -> Target:
     """The workspace to act in.
 
-    With nothing given, a single-workspace account resolves to that one -- the
-    unambiguous case should not need a flag. More than one is a question the
-    CLI cannot answer for the user, so it lists them and stops.
+    Explicit flags, environment and saved config are already resolved by Ctx.
+    With no selection, use the API default or its first workspace, matching the
+    web app's fallback. A single-workspace account never needs a flag.
     """
     if workspace and _OBJECT_ID.match(workspace.lower()):
         normalized = workspace.lower()
@@ -67,12 +67,13 @@ def resolve_workspace(
         )
 
     if workspace is None:
-        if len(found) == 1:
-            return found[0]
-        raise UsageError(
-            "more than one workspace, so there is no obvious default",
-            hint=f"Pass --workspace with one of: {_names(found)}",
-        )
+        default_id = payload.get("defaultWorkspaceId")
+        if default_id is not None:
+            default = next((target for target in found if target.id == default_id), None)
+            if default is None:
+                raise ApiError("The API's default workspace is not in your accessible workspaces.")
+            return default
+        return found[0]
 
     wanted = workspace.strip().lower()
     matches = [

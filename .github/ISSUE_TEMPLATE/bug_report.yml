@@ -1,0 +1,27 @@
+name: Bug report
+description: Report a reproducible CLI problem
+body:
+  - type: input
+    id: version
+    attributes:
+      label: CLI version and installation method
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: OS, shell and Python version
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Synthetic reproduction
+      description: Include commands and redacted errors. Do not include tokens, verification codes or customer data.
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Expected and actual results
+      description: Include exit code and JSON status when available.
+    validations:
+      required: true

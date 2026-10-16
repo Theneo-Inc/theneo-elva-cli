@@ -13,7 +13,7 @@ from elva_cli import auth
 from elva_cli.auth import get_access_token
 from elva_cli.core.api.http import HttpError, get_json
 from elva_cli.core.services.whoami_result import WhoamiResult
-from elva_cli.errors import ApiError, AuthError
+from elva_cli.errors import ApiError, AuthError, ForbiddenError
 
 _HTTP_TIMEOUT = 10.0
 _UNEXPECTED_RESPONSE = "The server returned an unexpected response while checking who you are."
@@ -25,6 +25,8 @@ def whoami(*, base_url: str) -> WhoamiResult:
     token = get_access_token(base_url=base_url)
     try:
         body = _fetch_me(base_url, token)
+    except ForbiddenError:
+        raise
     except AuthError as exc:
         raise _rejected_token_error() from exc
 
@@ -63,6 +65,8 @@ def _fetch_me(base_url: str, token: str) -> dict[str, Any]:
     try:
         body = get_json(url, token=token, timeout=_HTTP_TIMEOUT, reauth=reauth)
     except HttpError as exc:
+        if exc.status == 403:
+            raise ForbiddenError("You don't have permission to read this account.") from exc
         if exc.status == 401:
             raise AuthError("Your credentials are no longer valid.") from exc
         raise ApiError(f"Could not verify who you are (HTTP {exc.status}).") from exc

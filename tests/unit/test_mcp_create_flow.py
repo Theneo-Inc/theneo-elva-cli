@@ -13,7 +13,7 @@ from elva_cli.core.services.mcp_create_result import (
     McpDryRunResult,
     OperationOutcome,
 )
-from elva_cli.errors import ApiError, UsageError, ValidationError
+from elva_cli.errors import ApiError, ForbiddenError, UsageError, ValidationError
 
 BASE_URL = "https://api.getelva.ai"
 COMPANY = Target(id="0123456789abcdef01234567", name="Theneo")
@@ -303,7 +303,7 @@ class TestCreateMcp:
             slug="my-api",
             name="My API",
             tool_count=3,
-            runtime_url="https://runtime.getelva.ai",
+            runtime_url="https://runtime.getelva.ai/mcp/acme/my-api",
             auth_type="oauth",
             has_secret=True,
         )
@@ -329,11 +329,11 @@ class TestCreateMcp:
         with pytest.raises(UsageError, match="Upgrade"):
             service.create_mcp(base_url=BASE_URL, workspace=None, collection="Petstore", body={})
 
-    def test_403_is_a_usage_error_about_editor_access_not_an_auth_error(
+    def test_403_is_forbidden_about_editor_access(
         self, monkeypatch: pytest.MonkeyPatch, resolved: None
     ) -> None:
         responder(monkeypatch, HttpError(403, None))
-        with pytest.raises(UsageError, match="editor access"):
+        with pytest.raises(ForbiddenError, match="editor access"):
             service.create_mcp(base_url=BASE_URL, workspace=None, collection="Petstore", body={})
 
     def test_409_is_a_usage_error_about_a_conflict(

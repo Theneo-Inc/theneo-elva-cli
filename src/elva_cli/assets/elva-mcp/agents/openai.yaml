@@ -1,0 +1,6 @@
+interface:
+  display_name: "Elva MCP"
+  short_description: "Create customer MCPs from local API source"
+  default_prompt: "Use $elva-mcp to create a customer MCP and API contract from this repository, sending only the API definition to Elva."
+policy:
+  allow_implicit_invocation: true

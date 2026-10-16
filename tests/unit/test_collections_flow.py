@@ -23,7 +23,7 @@ from elva_cli.core.collections import (
     CollectionDetail,
     CollectionSummaries,
 )
-from elva_cli.errors import ApiError, AuthError, ExitCode, UsageError
+from elva_cli.errors import ApiError, AuthError, ExitCode, ForbiddenError, UsageError
 
 BASE_URL = "https://api.getelva.ai"
 COMPANY = "0123456789abcdef01234567"
@@ -275,11 +275,11 @@ class TestErrorMapping:
         assert caught.value.exit_code == ExitCode.API
 
     def test_403_and_404_point_at_the_workspace(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        for status in (403, 404):
+        for status, error_type in ((403, ForbiddenError), (404, UsageError)):
             responder(monkeypatch, HttpError(status, None))
-            with pytest.raises(UsageError) as caught:
+            with pytest.raises(error_type) as caught:
                 service.list_collections(BASE_URL, "tok", COMPANY)
-            assert caught.value.exit_code == ExitCode.USAGE
+            assert caught.value.exit_code == (ExitCode.AUTH if status == 403 else ExitCode.USAGE)
             assert "--workspace" in (caught.value.hint or "")
 
 

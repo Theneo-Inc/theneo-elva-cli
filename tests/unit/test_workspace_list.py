@@ -27,6 +27,24 @@ def responder(monkeypatch: pytest.MonkeyPatch, payload: Any) -> list[str]:
 
 
 class TestListWorkspaces:
+    @pytest.mark.parametrize("default_id", [None, "b" * 24])
+    def test_default_is_marked_active_with_multiple_workspaces(
+        self, monkeypatch: pytest.MonkeyPatch, default_id: str | None
+    ) -> None:
+        responder(
+            monkeypatch,
+            {
+                "workspaces": [{"id": OID, "name": "First"}, {"id": "b" * 24, "name": "Second"}],
+                "defaultWorkspaceId": default_id,
+            },
+        )
+        result = workspace_list.list_workspaces(
+            base_url=BASE_URL, active_workspace=None, active_origin="default"
+        )
+        assert [item.name for item in result.workspaces if item.active] == [
+            "Second" if default_id else "First"
+        ]
+
     def test_empty_list_with_nothing_configured(self, monkeypatch: pytest.MonkeyPatch) -> None:
         responder(monkeypatch, {"workspaces": []})
         result = workspace_list.list_workspaces(

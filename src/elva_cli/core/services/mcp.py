@@ -15,6 +15,7 @@ from elva_cli.core.services.mcp_common import (
     as_int,
     as_opt_str,
     as_str,
+    runtime_url,
     unknown_server,
     workspace_forbidden,
 )
@@ -106,21 +107,8 @@ def _to_detail(row: dict[str, Any]) -> McpServer:
         has_secret=has_secret if isinstance(has_secret, bool) else None,
         selected_operations=tuple(operations) if isinstance(operations, list) else None,
         version=as_opt_str(row.get("version")),
-        runtime_url=_runtime_url(row),
+        runtime_url=runtime_url(row),
     )
-
-
-def _runtime_url(row: dict[str, Any]) -> str | None:
-    base = row.get("runtimeUrl")
-    if not isinstance(base, str) or not base:
-        return None
-
-    settings_raw = row.get("settings")
-    settings: dict[str, Any] = settings_raw if isinstance(settings_raw, dict) else {}
-    slug = settings.get("customSlug") or row.get("mcpSlug")
-    if not isinstance(slug, str) or not slug:
-        return None
-    return f"{base.rstrip('/')}/mcp/{slug}"
 
 
 def _list_error(error: HttpError) -> Exception:

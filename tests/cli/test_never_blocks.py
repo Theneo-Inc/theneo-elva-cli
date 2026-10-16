@@ -29,6 +29,8 @@ NEEDS_AUTH: frozenset[tuple[str, ...]] = frozenset(
         ("whoami",),
         ("workspace", "list"),
         ("mcp", "list"),
+        ("repo", "list"),
+        ("contract", "list"),
     }
 )
 
@@ -76,6 +78,8 @@ def unattended(
         # these safety defaults by accident.
         "XDG_CONFIG_HOME": str(cwd / "xdg"),
         "PYTHON_KEYRING_BACKEND": "keyring.backends.fail.Keyring",
+        # Public commands also need an offline target in unattended tests.
+        "ELVA_BASE_URL": "http://127.0.0.1:1",
     }
     return subprocess.run(
         [sys.executable, "-m", "elva_cli", *args],
@@ -110,6 +114,8 @@ def test_command_terminates_with_stdin_closed(
     except subprocess.TimeoutExpired:
         pytest.fail(f"'elva {' '.join((*flags, *path))}' blocked for {TIMEOUT}s with stdin closed")
     allowed = NON_BLOCKING_EXIT_CODES | ({ExitCode.AUTH} if path in NEEDS_AUTH else set())
+    if path == ("insights", "checks"):
+        allowed |= {ExitCode.API}
     assert result.returncode in allowed, result.stderr.decode()
 
 

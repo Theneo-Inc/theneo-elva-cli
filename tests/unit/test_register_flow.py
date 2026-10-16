@@ -117,7 +117,9 @@ class TestFullFlowAgainstARealListener:
 
     def test_verification_completes_and_persists(self, monkeypatch: pytest.MonkeyPatch) -> None:
         saved: list[dict[str, object]] = []
-        monkeypatch.setattr(auth_service, "save_login", saved.append)
+        monkeypatch.setattr(
+            auth_service, "save_login", lambda payload, **_kw: saved.append(payload)
+        )
         body = {"user": {"email": "new@example.com"}, "tokens": {"access": {}, "refresh": {}}}
         monkeypatch.setattr(auth_service, "_exchange_token", lambda *_a, **_kw: body)
 
@@ -169,7 +171,7 @@ class TestFullFlowAgainstARealListener:
     def test_malformed_exchange_payload_surfaces_as_apierror_not_a_crash(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(auth_service, "save_login", lambda _payload: None)
+        monkeypatch.setattr(auth_service, "save_login", lambda _payload, **_kw: None)
         monkeypatch.setattr(
             auth_service, "_exchange_token", lambda *_a, **_kw: {"user": "nope", "tokens": {}}
         )
@@ -207,7 +209,7 @@ class TestFullFlowAgainstARealListener:
     def test_a_stray_request_does_not_consume_the_verification(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setattr(auth_service, "save_login", lambda _payload: None)
+        monkeypatch.setattr(auth_service, "save_login", lambda _payload, **_kw: None)
         body = {"user": {"email": "new@example.com"}, "tokens": {"access": {}, "refresh": {}}}
         monkeypatch.setattr(auth_service, "_exchange_token", lambda *_a, **_kw: body)
 
@@ -228,7 +230,7 @@ class TestFullFlowAgainstARealListener:
         body = {"user": {"email": "new@example.com"}, "tokens": {"access": {}, "refresh": {}}}
         monkeypatch.setattr(auth_service, "_exchange_token", lambda *_a, **_kw: body)
 
-        def unwritable(_payload: object) -> None:
+        def unwritable(_payload: object, **_kw: object) -> None:
             raise OSError("Read-only file system")
 
         monkeypatch.setattr(auth_service, "save_login", unwritable)

@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 from elva_cli.auth.models import Credentials
 from elva_cli.auth.store import FileStore, KeyringStore, StoreUnavailableError, TokenStore
 from elva_cli.core.api.identity import client_headers
+from elva_cli.core.api.timeout import request_timeout
 from elva_cli.core.services.auth_result import LogoutResult as LogoutResult
 from elva_cli.core.services.auth_result import LogoutStatus as LogoutStatus
 from elva_cli.errors import ApiError, AuthError
@@ -191,7 +192,7 @@ def _refresh(
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with urllib.request.urlopen(request, timeout=request_timeout(timeout)) as response:
                 raw = response.read()
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
@@ -211,7 +212,7 @@ def _refresh(
             last_transient = exc
             continue  # transient - back off and retry
         else:
-            return _parse_refresh_body(raw)
+            return _parse_refresh_body(raw, base_url=base_url)
 
     raise ApiError("Could not reach the server to refresh your session.") from last_transient
 
@@ -226,7 +227,7 @@ def _error_code(exc: Any) -> str | None:
     return code if isinstance(code, str) else None
 
 
-def _parse_refresh_body(raw: bytes) -> Credentials:
+def _parse_refresh_body(raw: bytes, *, base_url: str) -> Credentials:
     unexpected = "The server returned an unexpected response while refreshing your session."
     try:
         body = json.loads(raw)
@@ -235,21 +236,30 @@ def _parse_refresh_body(raw: bytes) -> Credentials:
     if not isinstance(body, dict):
         raise ApiError(unexpected)
     try:
-        return Credentials.from_auth_tokens(body)
+        return Credentials.from_auth_tokens(body, api_origin=base_url.rstrip("/"))
     except (KeyError, ValueError, TypeError) as exc:
         raise ApiError(unexpected) from exc
 
 
-def get_access_token(*, base_url: str) -> str:
+def _check_origin(creds: Credentials, base_url: str) -> None:
+    if creds.api_origin and creds.api_origin != base_url.rstrip("/"):
+        raise AuthError(
+            "Stored credentials belong to another Elva API server. Sign in to this server."
+        )
+
+
+def get_access_token(*, base_url: str, use_env: bool = True) -> str:
     """The bearer token to send on this request. Refreshes a near-expiry
     session transparently; raises AuthError if there's nothing usable."""
     env_token = os.environ.get(ENV_TOKEN)
-    if env_token:
+    if env_token and use_env:
         return env_token
 
     creds, store = _load_from_first_available_store()
     if creds is None or store is None:
         raise AuthError("You're not logged in.")
+
+    _check_origin(creds, base_url)
 
     if creds.kind == "pat":
         return creds.access_token
@@ -293,6 +303,7 @@ def _refresh_session(*, base_url: str) -> str:
         ):
             raise AuthError("Your session has expired.")
 
+        _check_origin(creds, base_url)
         now = datetime.now(UTC)
         if creds.access_expires_at - now > _SKEW:
             return creds.access_token
@@ -334,6 +345,7 @@ def refresh_now(*, base_url: str, stale_access_token: str) -> str:
         ):
             raise AuthError("Your session has expired.")
 
+        _check_origin(creds, base_url)
         if creds.access_token != stale_access_token:
             # A sibling process refreshed while we held the stale token.
             return creds.access_token
@@ -367,14 +379,16 @@ def forget_stored_credentials() -> None:
     _clear_all_stores()
 
 
-def save_login(payload: dict[str, Any]) -> None:
+def save_login(payload: dict[str, Any], *, base_url: str | None = None) -> None:
     """Persist a fresh OAuth session from the CLI login exchange.
 
     POST /api/auth/cli/token responds with {"user": ..., "tokens": {...}};
     the refresh endpoint responds with the bare {"access", "refresh"} shape.
     Accept either so callers don't have to care which one they hold."""
     tokens = payload.get("tokens", payload)
-    _save_preferring_keyring(Credentials.from_auth_tokens(tokens))
+    _save_preferring_keyring(
+        Credentials.from_auth_tokens(tokens, api_origin=base_url.rstrip("/") if base_url else None)
+    )
 
 
 def save_pat(token: str) -> None:
@@ -396,7 +410,7 @@ def _revoke_server_side(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout):
+        with urllib.request.urlopen(request, timeout=request_timeout(timeout)):
             pass
     except (urllib.error.URLError, TimeoutError):
         return False
@@ -408,6 +422,7 @@ def _revocation_token(
 ) -> str | None:
     """An access token that will still authenticate the logout call, or None
     if the session is already dead server-side and there's nothing to revoke."""
+    _check_origin(creds, base_url)
     now = datetime.now(UTC)
     if creds.access_expires_at is not None and creds.access_expires_at - now > _SKEW:
         return creds.access_token
@@ -433,6 +448,7 @@ def logout(*, base_url: str) -> LogoutResult:
         if creds is None:
             _clear_all_stores()
             return LogoutResult(status=LogoutStatus.NOT_SIGNED_IN)
+        _check_origin(creds, base_url)
         if creds.kind == "pat":
             _clear_all_stores()
             return LogoutResult(status=LogoutStatus.SIGNED_OUT)

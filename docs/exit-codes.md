@@ -11,7 +11,7 @@ meaning. Adding a new code is safe; changing an existing one is a breaking chang
 | `2` | `USAGE` | Bad flags or arguments, or an answer was required with no terminal to ask on. | fix the invocation |
 | `3` | `AUTH` | Not authenticated, the stored credentials no longer work, or the account is not allowed to do this. | re-authenticate, then retry — **unless** the code is `ELVA_FORBIDDEN` |
 | `4` | `VALIDATION` | **The input spec is invalid. The CLI worked correctly.** | fail the build; show the report |
-| `5` | `API` | The Elva API was unreachable or returned a server error. | safe to retry with backoff |
+| `5` | `API` | The Elva API was unreachable or returned a server error. | retry reads with backoff; inspect mutations first |
 | `130` | `INTERRUPTED` | Interrupted by Ctrl-C (`128 + SIGINT`). | no action |
 
 ## Why `4` is separate from `1`
@@ -23,9 +23,9 @@ forces every pipeline into one of two bad choices: ignore failures, or block on
 failures it cannot diagnose. Keeping them apart lets CI do the obvious thing:
 
 ```bash
-elva lint openapi.yaml
+elva --yes import spec openapi.yaml
 case $? in
-  0) echo "spec is clean" ;;
+  0) echo "spec imported" ;;
   4) echo "spec has problems"; exit 1 ;;      # our fault, fail the build
   5) echo "Elva unreachable"; exit 0 ;;       # not our fault, do not block
   *) echo "elva itself failed"; exit 1 ;;
@@ -59,14 +59,15 @@ fi
 
 ## Retrying
 
-Only `5` is safe to retry unconditionally. `3` is retryable after
+For read-only requests, `5` can be retried with backoff. After a timeout on a
+create or update, check the resource before retrying: the server may have completed it. `3` is retryable after
 re-authenticating, unless it came with `ELVA_FORBIDDEN`. `2` and `4` will produce
 the same result every time — retrying is pointless. `1` may or may not be
 deterministic; treat it as a bug.
 
 ## Error output
 
-Every user-facing failure prints to **stderr**, never stdout, in one shape:
+Many commands print domain failures to **stderr** in this shape:
 
 ```
 ELVA_AUTH: session expired
@@ -77,6 +78,8 @@ ELVA_AUTH: session expired
   change wording between releases.
 - A human message.
 - Where one exists, the next action to take.
+
+Parser failures use Typer usage text with exit `2`. Under `--json`, agent and email-auth domain errors also return structured stdout errors; older commands may use stderr only. See [the agent interface](agent-interface.md) for the different envelopes. Always inspect the exit code.
 
 Codes currently defined: `ELVA_ERROR`, `ELVA_USAGE`, `ELVA_CONFIG`, `ELVA_AUTH`,
 `ELVA_FORBIDDEN`, `ELVA_VALIDATION`, `ELVA_API`, `ELVA_CRASH`, `ELVA_AMBIGUOUS_COLLECTION`.
@@ -127,3 +130,55 @@ error is still reported and the exit code is still `1`.
   boundary every failure passes through.
 - [`tests/unit/test_exit_codes.py`](../tests/unit/test_exit_codes.py) — asserts
   the numeric values, so renumbering fails the build.
+
+## Repository scans
+
+Repository commands retain the same numeric exit codes and add these stable
+machine codes:
+
+| Code | Exit | Meaning / next step |
+| --- | ---: | --- |
+| `ELVA_GITHUB_AUTH` | 3 | Connect or reconnect GitHub in the Elva web app; refreshing the Elva login does not fix this. |
+| `ELVA_REPO_SCOPE` | 5 | The backend did not confirm the requested workspace; deploy the matching repository API. No write is attempted after a failed preflight. |
+| `ELVA_REPO_QUEUE_FULL` | 5 | Queue or request limit reached. A connect result may include a saved repository with no job; retry `repo sync` later. |
+| `ELVA_REPO_PLAN_LIMIT` | 5 | Review the workspace plan and connected repositories before retrying. |
+| `ELVA_REPO_WAIT_TIMEOUT` | 5 | The local wait expired. Inspect the existing job with `repo status JOB_ID`. |
+| `ELVA_REPO_SCAN_FAILED` | 5 | The backend scan failed. Read the job's errors before retrying. |
+| `ELVA_REPO_SCAN_CANCELLED` | 2 | The remote scan was cancelled. Start a new sync when appropriate. |
+| `ELVA_REPO_SYNC_INCOMPLETE` | 4 | The scan finished without confirming collection sync (for example, no endpoints found and existing collections preserved). Review the scan result. |
+
+Exit 4 also covers repository scan output that could not be materialized into
+collections. Exit 0 without `--wait` means a job was accepted or already running;
+it does not assert that collections changed. A completed scan with nonfatal
+warnings and valid collection results still exits 0 and includes those warnings.
+Ctrl-C exits 130 and leaves the remote job running. In JSON mode, a failed scan
+or wait includes its `error` and job ID in the single stdout result, followed by
+the normal error on stderr. Failures before a result exists use stderr only.
+
+## API insights and contracts
+
+`ELVA_INSIGHTS_GATE` (exit 4) means the overall score was below `--fail-under`,
+or the document was unscorable. The full review is emitted before the error so
+CI can keep its findings. Without a threshold, a completed report can contain
+failed checks or N/A grades and still exit 0; invalid/unreviewable inputs exit 4.
+
+`ELVA_CONTRACT_PUBLISH_INCOMPLETE` (exit 5) means at least one configured
+destination failed or was skipped, or no destination outcome was returned.
+The result lists every outcome; successful destinations are not rolled back.
+Membership/role/approver denial exits 3, invalid input or a blocked release exits
+2, and contract validation rejection (HTTP 422) exits 4. Update and sync never
+implicitly publish.
+
+## AI plans
+
+`ELVA_PLAN_PENDING` (5): the planning job is still running; resume with `elva plan show JOB_ID`. `ELVA_PLAN_UNAVAILABLE` (5): planning could not complete because of a provider/server failure. `ELVA_PLAN_FAILED` (4): the plan was rejected. An incomplete plan cannot be applied (4). Modified files, wrong workspaces, source/revision conflicts and a contract MCP sent to standalone publish are usage conflicts (2). Apply is idempotent: retry the same review file after uncertain network failures; never blindly create another plan/resource.
+
+
+## Local source prompt jobs
+
+`ELVA_INPUT_REQUIRED` (2): source scanning completed but the API host is missing.
+Use the printed `elva --resume JOB_ID --api-base-url URL` command.
+`ELVA_PLAN_PENDING` (5): local source planning is still running; resume the job.
+A failed planning job with retained source collections can be retried with
+`--resume` without another upload. Failed scanning without collections requires
+a new prompt. Source limit/URL/filename errors fail before upload where possible.

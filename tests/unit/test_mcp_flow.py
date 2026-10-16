@@ -8,7 +8,7 @@ from elva_cli.core.api.http import HttpError
 from elva_cli.core.api.targets import Target
 from elva_cli.core.services import mcp as service
 from elva_cli.core.services.mcp_result import McpListResult, McpServer, McpShowResult
-from elva_cli.errors import ApiError, AuthError, UsageError
+from elva_cli.errors import ApiError, AuthError, ForbiddenError, UsageError
 
 BASE_URL = "https://api.getelva.ai"
 COMPANY = "0123456789abcdef01234567"
@@ -103,11 +103,11 @@ class TestListMcps:
         result = service.list_mcps(base_url=BASE_URL, workspace=None)
         assert result == McpListResult(servers=())
 
-    def test_403_is_a_usage_error_not_a_misleading_autherror(
+    def test_403_is_forbidden_not_a_misleading_autherror(
         self, monkeypatch: pytest.MonkeyPatch, signed_in: None
     ) -> None:
         responder(monkeypatch, HttpError(403, "Forbidden"))
-        with pytest.raises(UsageError) as caught:
+        with pytest.raises(ForbiddenError) as caught:
             service.list_mcps(base_url=BASE_URL, workspace=None)
         assert "workspace" in str(caught.value)
 
@@ -158,7 +158,7 @@ class TestShowMcp:
                 has_secret=True,
                 selected_operations=("GET /widgets", "POST /widgets"),
                 version="1.0.0",
-                runtime_url="https://runtime.getelva.ai/mcp/widgets",
+                runtime_url="https://runtime.getelva.ai/mcp/acme/widgets",
             )
         )
         assert seen == [f"{BASE_URL}/api/companies/{COMPANY}/mcps/widgets"]
@@ -206,9 +206,9 @@ class TestShowMcp:
         assert caught.value.hint is not None
         assert "mcp list" in caught.value.hint
 
-    def test_403_is_a_usage_error(self, monkeypatch: pytest.MonkeyPatch, signed_in: None) -> None:
+    def test_403_is_forbidden(self, monkeypatch: pytest.MonkeyPatch, signed_in: None) -> None:
         responder(monkeypatch, HttpError(403, None))
-        with pytest.raises(UsageError):
+        with pytest.raises(ForbiddenError):
             service.show_mcp(base_url=BASE_URL, workspace=None, slug="widgets")
 
     def test_malformed_response_is_an_api_error(

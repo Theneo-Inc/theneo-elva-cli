@@ -19,6 +19,7 @@ app = typer.Typer(
     name="elva",
     help="Elva - CLI for Theneo Elva.",
     no_args_is_help=True,
+    invoke_without_command=True,
     pretty_exceptions_enable=False,
     context_settings={"help_option_names": ["-h", "--help"]},
 )
@@ -37,6 +38,40 @@ def _version_callback(value: bool) -> None:
 @app.callback()
 def root(
     click_ctx: typer.Context,
+    prompt: str | None = typer.Option(
+        None,
+        "--prompt",
+        help="Describe an MCP to build directly from this checkout, with an API contract.",
+    ),
+    path: Path | None = typer.Option(
+        None, "--path", help="API source directory for --prompt; defaults to the checkout root."
+    ),
+    audience: str | None = typer.Option(
+        None, "--audience", help="MCP audience: partner, public or internal. Asked when needed."
+    ),
+    api_base_url: str | None = typer.Option(
+        None,
+        "--api-base-url",
+        help="Live upstream API URL, if it cannot be discovered from source.",
+    ),
+    auth_type: str | None = typer.Option(
+        None, "--auth-type", help="Upstream authentication: bearer (default), api_key or none."
+    ),
+    api_key_header: str | None = typer.Option(
+        None, "--api-key-header", help="Header used for upstream API-key authentication."
+    ),
+    resume: str | None = typer.Option(
+        None, "--resume", help="Resume a local source planning job without uploading again."
+    ),
+    plan_only: bool = typer.Option(
+        False, "--plan-only", help="Generate and save the review without creating the contract/MCP."
+    ),
+    out: Path | None = typer.Option(
+        None, "--out", help="Save the prompt workflow's plan to this new file."
+    ),
+    name: str | None = typer.Option(
+        None, "--name", help="Contract and MCP name for the prompt workflow."
+    ),
     profile: str | None = typer.Option(
         None, "--profile", envvar="ELVA_PROFILE", help="Named set of defaults from your config."
     ),
@@ -70,7 +105,7 @@ def root(
         help="Show the current build version.",
     ),
 ) -> None:
-    click_ctx.obj = Ctx(
+    ctx = Ctx(
         GlobalOptions(
             profile=profile,
             base_url=base_url,
@@ -84,6 +119,50 @@ def root(
         cwd=Path.cwd(),
         env=os.environ,
     )
+    click_ctx.obj = ctx
+    from elva_cli.core.api.timeout import use_timeout
+
+    click_ctx.with_resource(use_timeout(lambda: ctx.settings.timeout))
+    if prompt is not None or resume is not None:
+        from elva_cli.commands.prompt import run_prompt
+        from elva_cli.errors import UsageError
+
+        if click_ctx.invoked_subcommand or (prompt is not None and resume is not None):
+            raise UsageError("Use --prompt or --resume on its own, without a subcommand.")
+        if resume and any(v is not None for v in (path, audience, name, auth_type, api_key_header)):
+            raise UsageError(
+                "--resume keeps the source, audience, name and authentication of the original job."
+            )
+        run_prompt(
+            ctx,
+            prompt=prompt,
+            path=path,
+            audience=audience,
+            api_base_url=api_base_url,
+            resume=resume,
+            plan_only=plan_only,
+            out=out,
+            name=name,
+            auth_type=auth_type,
+            api_key_header=api_key_header,
+        )
+    elif (
+        any(
+            value is not None
+            for value in (path, audience, api_base_url, out, name, auth_type, api_key_header)
+        )
+        or plan_only
+    ):
+        from elva_cli.errors import UsageError
+
+        raise UsageError(
+            "Prompt workflow options require --prompt or --resume. "
+            "Put subcommand options after the subcommand."
+        )
+    elif click_ctx.invoked_subcommand is None:
+        from elva_cli.errors import UsageError
+
+        raise UsageError("Choose a command or describe your MCP with --prompt.")
 
 
 def report(error: ElvaError) -> None:
@@ -143,7 +222,8 @@ def _is_framework_error(exc: BaseException) -> TypeGuard[_FrameworkError]:
 
 def _run() -> int:
     try:
-        app(prog_name="elva", standalone_mode=False)
+        result = app(prog_name="elva", standalone_mode=False)
+        return int(result) if isinstance(result, int) else int(ExitCode.OK)
     except typer.Exit as exc:
         return int(exc.exit_code)
     except typer.Abort:
@@ -171,7 +251,6 @@ def _run() -> int:
             )
         )
         return int(ExitCode.UNEXPECTED)
-    return int(ExitCode.OK)
 
 
 def main() -> None:

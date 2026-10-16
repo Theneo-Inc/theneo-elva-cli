@@ -13,6 +13,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  wheel-and-minimum-typer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+      - run: uv build
+      - run: |
+          uv venv /tmp/wheel
+          uv pip install --python /tmp/wheel/bin/python dist/*.whl typer==0.27.1
+          /tmp/wheel/bin/python scripts/smoke_wheel.py
+
   lint:
     runs-on: ubuntu-latest
     steps:

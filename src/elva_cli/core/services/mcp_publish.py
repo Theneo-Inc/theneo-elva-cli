@@ -13,10 +13,11 @@ from elva_cli.core.services.mcp_common import (
     as_opt_str,
     as_str,
     reauth_for,
+    runtime_url,
     unknown_server,
 )
 from elva_cli.core.services.mcp_create_result import McpCreateResult
-from elva_cli.errors import ApiError, UsageError, ValidationError
+from elva_cli.errors import ApiError, ForbiddenError, UsageError, ValidationError
 
 _UNEXPECTED_RESPONSE = "The server returned an unexpected response while publishing the MCP server."
 
@@ -44,7 +45,7 @@ def _to_result(body: Any) -> McpCreateResult:
         slug=as_str(body.get("mcpSlug")),
         name=as_str(body.get("apiName")),
         tool_count=as_int(body.get("toolCount")),
-        runtime_url=as_opt_str(body.get("runtimeUrl")),
+        runtime_url=runtime_url(body),
         auth_type=as_opt_str(auth_config.get("type")) or "none",
         has_secret=has_secret if isinstance(has_secret, bool) else None,
         status=as_opt_str(body.get("status")) or "published",
@@ -57,16 +58,28 @@ def _publish_error(error: HttpError, *, slug: str) -> Exception:
     if error.status == 400:
         return ValidationError(error.detail or "The server rejected this publish request.")
     if error.status == 404:
+        if error.detail in ("Not found", "Not Found") or (
+            error.detail and error.detail.startswith("Cannot POST ")
+        ):
+            return ApiError(
+                "This server does not support MCP publishing yet.",
+                hint="Ask the server administrator to deploy the matching Elva API version.",
+            )
         if error.detail and error.detail != "MCP not found":
             return UsageError(error.detail)
         return unknown_server(slug)
+    if error.status == 409:
+        return UsageError(
+            error.detail or "This MCP changed or belongs to a contract.",
+            hint="Review the conflict. Contract MCPs publish through elva contract publish.",
+        )
     if error.status == 402:
         return UsageError(
             error.detail or "You've reached your MCP server limit.",
             hint="Upgrade your plan, or remove an existing MCP server.",
         )
     if error.status == 403:
-        return UsageError(
+        return ForbiddenError(
             "you need editor access to publish MCP servers in this workspace",
             hint="Ask a workspace admin, or check --workspace.",
         )

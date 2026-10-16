@@ -41,18 +41,41 @@ class TestResolveWorkspace:
         assert target.id == OID
         assert target.name == "Theneo"
 
-    def test_several_workspaces_and_no_flag_lists_them(
+    def test_several_workspaces_and_no_flag_uses_web_default(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         responder(
             monkeypatch,
             {"workspaces": [{"id": OID, "name": "Theneo"}, {"id": "b" * 24, "name": "Side"}]},
         )
-        with pytest.raises(UsageError) as caught:
+        target = targets.resolve_workspace(base_url=BASE_URL, token="t", workspace=None)
+        assert target.id == OID
+
+    def test_server_default_wins_over_order(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        responder(
+            monkeypatch,
+            {"workspaces": [{"id": OID}, {"id": "b" * 24}], "defaultWorkspaceId": "b" * 24},
+        )
+        assert (
+            targets.resolve_workspace(base_url=BASE_URL, token="t", workspace=None).id == "b" * 24
+        )
+
+    def test_explicit_selection_wins_over_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        responder(
+            monkeypatch,
+            {"workspaces": [{"id": OID, "name": "First"}, {"id": "b" * 24, "name": "Second"}]},
+        )
+        assert (
+            targets.resolve_workspace(base_url=BASE_URL, token="t", workspace="Second").id
+            == "b" * 24
+        )
+
+    def test_inaccessible_default_is_not_silently_replaced(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        responder(monkeypatch, {"workspaces": [{"id": OID}], "defaultWorkspaceId": "b" * 24})
+        with pytest.raises(ApiError):
             targets.resolve_workspace(base_url=BASE_URL, token="t", workspace=None)
-        assert caught.value.hint is not None
-        assert "Theneo" in caught.value.hint
-        assert "Side" in caught.value.hint
 
     def test_matched_by_name_case_insensitively(self, monkeypatch: pytest.MonkeyPatch) -> None:
         responder(monkeypatch, {"workspaces": [{"id": OID, "name": "Theneo"}]})

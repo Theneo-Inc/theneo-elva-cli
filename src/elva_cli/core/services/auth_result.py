@@ -43,3 +43,24 @@ class LogoutStatus(enum.StrEnum):
 @dataclass(frozen=True)
 class LogoutResult:
     status: LogoutStatus
+
+
+@dataclass(frozen=True)
+class EmailAuthResult:
+    status: str
+    session_id: str | None = None
+    email: str | None = None
+    expires_at: str | None = None
+    workspace_id: str | None = None
+    artifact_file: str | None = None
+    next_action: str | None = None
+    message: str | None = None
+
+
+@dataclass(frozen=True)
+class AuthFailure:
+    status: str
+    code: str
+    message: str
+    hint: str | None
+    retryable: bool
